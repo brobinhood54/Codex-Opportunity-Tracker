@@ -2,6 +2,7 @@
 
 import {
   CSSProperties,
+  ChangeEvent,
   FormEvent,
   useCallback,
   useEffect,
@@ -19,6 +20,18 @@ type Stage =
   | "Commit";
 
 type RiskLevel = "Low" | "Medium" | "High";
+type TabId =
+  | "overview"
+  | "context"
+  | "stakeholders"
+  | "partners"
+  | "questions"
+  | "pain"
+  | "rfi"
+  | "success"
+  | "calls"
+  | "research"
+  | "gameplan";
 
 type Opportunity = {
   id: number;
@@ -46,6 +59,66 @@ type Draft = Omit<
   amount: string;
 };
 
+type AccountProfile = {
+  id: number;
+  accountName: string;
+  industry: string;
+  segment: string;
+  health: string;
+  score: number;
+  notes: string;
+};
+
+type ContextSource = {
+  id: number;
+  sourceType: string;
+  title: string;
+  summary: string;
+  sourceDate: string;
+  status: string;
+  createdAt: string;
+};
+
+type TranscriptQuestion = {
+  question: string;
+  status: string;
+};
+
+type TranscriptSignal = {
+  label: string;
+  tone: string;
+};
+
+type CallTranscript = {
+  id: number;
+  title: string;
+  callDate: string;
+  transcript: string;
+  summary: string;
+  attendees: string[];
+  questions: TranscriptQuestion[];
+  signals: TranscriptSignal[];
+  createdAt: string;
+};
+
+type ResearchBrief = {
+  id: number;
+  title: string;
+  status: string;
+  summary: string;
+  sources: { title?: string; url?: string }[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AccountData = {
+  profile: AccountProfile;
+  opportunities: Opportunity[];
+  sources: ContextSource[];
+  transcripts: CallTranscript[];
+  researchBriefs: ResearchBrief[];
+};
+
 const STAGES: { id: Stage; progress: number; accent: string }[] = [
   { id: "Discovery", progress: 15, accent: "#263241" },
   { id: "Qualified", progress: 35, accent: "#177e81" },
@@ -53,6 +126,20 @@ const STAGES: { id: Stage; progress: number; accent: string }[] = [
   { id: "Proposal", progress: 70, accent: "#c99b36" },
   { id: "Negotiation", progress: 85, accent: "#4f6f9f" },
   { id: "Commit", progress: 95, accent: "#41825b" },
+];
+
+const ACCOUNT_TABS: { id: TabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "context", label: "Deal Context" },
+  { id: "stakeholders", label: "Stakeholders" },
+  { id: "partners", label: "Partners" },
+  { id: "questions", label: "Questions" },
+  { id: "pain", label: "Pain & Fit" },
+  { id: "rfi", label: "RFI / RFP" },
+  { id: "success", label: "Success Criteria" },
+  { id: "calls", label: "Call Planning" },
+  { id: "research", label: "Research" },
+  { id: "gameplan", label: "Gameplan" },
 ];
 
 const EMPTY_DRAFT: Draft = {
@@ -135,6 +222,10 @@ function nextStage(stage: Stage) {
   return STAGES[Math.min(index + 1, STAGES.length - 1)].id;
 }
 
+function uniqueValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
 export default function OpportunityTracker() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -146,6 +237,11 @@ export default function OpportunityTracker() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [accountName, setAccountName] = useState<string | null>(null);
+  const [accountData, setAccountData] = useState<AccountData | null>(null);
+  const [accountLoading, setAccountLoading] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
   const selectedIdRef = useRef<number | null>(null);
 
   const selected = useMemo(
@@ -159,9 +255,7 @@ export default function OpportunityTracker() {
 
   const loadOpportunities = useCallback(async () => {
     try {
-      const response = await fetch("/api/opportunities", {
-        cache: "no-store",
-      });
+      const response = await fetch("/api/opportunities", { cache: "no-store" });
       const payload = (await response.json()) as {
         opportunities?: Opportunity[];
         error?: string;
@@ -189,6 +283,34 @@ export default function OpportunityTracker() {
       );
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadAccount = useCallback(async (nextAccountName: string) => {
+    setAccountLoading(true);
+    setAccountError("");
+
+    try {
+      const response = await fetch(
+        `/api/accounts?accountName=${encodeURIComponent(nextAccountName)}`,
+        { cache: "no-store" }
+      );
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? "Unable to load account.");
+      }
+
+      setAccountData(payload.account);
+    } catch (loadError) {
+      setAccountError(
+        loadError instanceof Error ? loadError.message : "Unable to load account."
+      );
+    } finally {
+      setAccountLoading(false);
     }
   }, []);
 
@@ -259,11 +381,22 @@ export default function OpportunityTracker() {
 
   function selectOpportunity(id: number) {
     const opportunity = opportunities.find((item) => item.id === id);
+    if (!opportunity) return;
+
     setSelectedId(id);
     selectedIdRef.current = id;
-    if (opportunity) {
-      setDraft(toDraft(opportunity));
-    }
+    setDraft(toDraft(opportunity));
+    setAccountName(opportunity.accountName);
+    setActiveTab("overview");
+    void loadAccount(opportunity.accountName);
+  }
+
+  function returnToDashboard() {
+    setAccountName(null);
+    setAccountData(null);
+    setAccountError("");
+    setActiveTab("overview");
+    void loadOpportunities();
   }
 
   async function saveOpportunity(event: FormEvent<HTMLFormElement>) {
@@ -295,9 +428,7 @@ export default function OpportunityTracker() {
       const saved = result.opportunity;
       setOpportunities((current) => {
         if (selected) {
-          return current.map((item) =>
-            item.id === saved.id ? saved : item
-          );
+          return current.map((item) => (item.id === saved.id ? saved : item));
         }
         return [saved, ...current];
       });
@@ -337,9 +468,7 @@ export default function OpportunityTracker() {
 
       const saved = result.opportunity;
       setOpportunities((current) =>
-        current.map((item) =>
-          item.id === saved.id ? saved : item
-        )
+        current.map((item) => (item.id === saved.id ? saved : item))
       );
       setDraft(toDraft(saved));
     } catch (patchError) {
@@ -394,6 +523,23 @@ export default function OpportunityTracker() {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (accountName) {
+    return (
+      <AccountView
+        accountData={accountData}
+        accountError={accountError}
+        accountLoading={accountLoading}
+        accountName={accountName}
+        activeTab={activeTab}
+        onBack={returnToDashboard}
+        onReload={() => void loadAccount(accountName)}
+        onTabChange={setActiveTab}
+        onAccountUpdate={setAccountData}
+        primaryOpportunity={selected}
+      />
+    );
   }
 
   return (
@@ -537,9 +683,13 @@ export default function OpportunityTracker() {
               <h2>{selected ? selected.accountName : "Opportunity"}</h2>
             </div>
             {selected ? (
-              <span className={`risk-pill risk-${selected.riskLevel.toLowerCase()}`}>
-                {selected.riskLevel}
-              </span>
+              <button
+                className="secondary-button compact-button"
+                onClick={() => selectOpportunity(selected.id)}
+                type="button"
+              >
+                Open account
+              </button>
             ) : null}
           </div>
 
@@ -712,6 +862,700 @@ export default function OpportunityTracker() {
   );
 }
 
+function AccountView({
+  accountData,
+  accountError,
+  accountLoading,
+  accountName,
+  activeTab,
+  onAccountUpdate,
+  onBack,
+  onReload,
+  onTabChange,
+  primaryOpportunity,
+}: {
+  accountData: AccountData | null;
+  accountError: string;
+  accountLoading: boolean;
+  accountName: string;
+  activeTab: TabId;
+  onAccountUpdate: (account: AccountData) => void;
+  onBack: () => void;
+  onReload: () => void;
+  onTabChange: (tab: TabId) => void;
+  primaryOpportunity: Opportunity | null;
+}) {
+  const opportunities = accountData?.opportunities ?? [];
+  const totalValue = opportunities.reduce((sum, item) => sum + item.amount, 0);
+  const weightedValue = opportunities.reduce(
+    (sum, item) => sum + item.amount * (item.probability / 100),
+    0
+  );
+  const openQuestions =
+    accountData?.transcripts.reduce(
+      (sum, transcript) => sum + transcript.questions.length,
+      0
+    ) ?? 0;
+  const stakeholders = uniqueValues(
+    accountData?.transcripts.flatMap((transcript) => transcript.attendees) ?? []
+  );
+
+  return (
+    <main className="app-shell account-shell">
+      <header className="account-topbar">
+        <div className="account-title-row">
+          <button className="icon-button" onClick={onBack} type="button">
+            Back
+          </button>
+          <div>
+            <p className="eyebrow">Account workspace</p>
+            <h1>{accountName}</h1>
+            <div className="account-badges">
+              <span>{accountData?.profile.industry ?? "Unknown"}</span>
+              <span>{primaryOpportunity?.stage ?? "Prospect"}</span>
+              <span>{accountData?.profile.health ?? "Loading"}</span>
+            </div>
+          </div>
+        </div>
+        <div className="topbar-actions">
+          <button className="secondary-button" onClick={onReload}>
+            Refresh
+          </button>
+          <button className="primary-button" onClick={() => onTabChange("context")}>
+            Add context
+          </button>
+        </div>
+      </header>
+
+      <nav className="account-tabs" aria-label="Account sections">
+        {ACCOUNT_TABS.map((tab) => (
+          <button
+            className={activeTab === tab.id ? "account-tab active" : "account-tab"}
+            key={tab.id}
+            onClick={() => onTabChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {accountError ? <div className="status-banner">{accountError}</div> : null}
+
+      {accountLoading && !accountData ? (
+        <div className="empty-state">Loading account...</div>
+      ) : (
+        <section className="account-layout">
+          <aside className="account-rail" aria-label="Account summary">
+            <Metric label="Open opps" value={String(opportunities.length)} />
+            <Metric label="Pipeline" value={formatCompact(totalValue)} />
+            <Metric label="Weighted" value={formatCompact(weightedValue)} />
+            <Metric label="Sources" value={String(accountData?.sources.length ?? 0)} />
+            <Metric label="People" value={String(stakeholders.length)} />
+            <Metric label="Questions" value={String(openQuestions)} tone="watch" />
+          </aside>
+
+          <section className="account-main">
+            <AccountTabPanel
+              accountData={accountData}
+              accountName={accountName}
+              activeTab={activeTab}
+              onAccountUpdate={onAccountUpdate}
+              primaryOpportunity={primaryOpportunity}
+              stakeholders={stakeholders}
+            />
+          </section>
+        </section>
+      )}
+    </main>
+  );
+}
+
+function AccountTabPanel({
+  accountData,
+  accountName,
+  activeTab,
+  onAccountUpdate,
+  primaryOpportunity,
+  stakeholders,
+}: {
+  accountData: AccountData | null;
+  accountName: string;
+  activeTab: TabId;
+  onAccountUpdate: (account: AccountData) => void;
+  primaryOpportunity: Opportunity | null;
+  stakeholders: string[];
+}) {
+  if (!accountData) {
+    return <div className="empty-state">No account data loaded.</div>;
+  }
+
+  if (activeTab === "context") {
+    return (
+      <DealContextTab
+        accountData={accountData}
+        accountName={accountName}
+        onAccountUpdate={onAccountUpdate}
+      />
+    );
+  }
+
+  if (activeTab === "stakeholders") {
+    return <StakeholdersTab accountData={accountData} stakeholders={stakeholders} />;
+  }
+
+  if (activeTab === "questions") {
+    return <QuestionsTab accountData={accountData} />;
+  }
+
+  if (activeTab === "pain") {
+    return <PainFitTab accountData={accountData} />;
+  }
+
+  if (activeTab === "research") {
+    return (
+      <ResearchTab
+        accountData={accountData}
+        accountName={accountName}
+        onAccountUpdate={onAccountUpdate}
+      />
+    );
+  }
+
+  if (activeTab === "gameplan") {
+    return <GameplanTab accountData={accountData} primaryOpportunity={primaryOpportunity} />;
+  }
+
+  if (activeTab === "calls") {
+    return <CallsTab accountData={accountData} />;
+  }
+
+  if (activeTab === "partners") {
+    return <PlaceholderTab title="Partner roster" value="No partners recorded yet." />;
+  }
+
+  if (activeTab === "rfi") {
+    return <PlaceholderTab title="RFI / RFP" value="No RFI documents loaded yet." />;
+  }
+
+  if (activeTab === "success") {
+    return (
+      <PlaceholderTab
+        title="Success criteria"
+        value="No success criteria document loaded yet."
+      />
+    );
+  }
+
+  return (
+    <OverviewTab
+      accountData={accountData}
+      primaryOpportunity={primaryOpportunity}
+      stakeholders={stakeholders}
+    />
+  );
+}
+
+function OverviewTab({
+  accountData,
+  primaryOpportunity,
+  stakeholders,
+}: {
+  accountData: AccountData;
+  primaryOpportunity: Opportunity | null;
+  stakeholders: string[];
+}) {
+  const recentSources = accountData.sources.slice(0, 4);
+
+  return (
+    <div className="tab-stack">
+      <section className="insight-panel next-step-panel">
+        <p className="eyebrow">Next step</p>
+        <h2>{primaryOpportunity?.nextStep || "No next step set"}</h2>
+        <p>{primaryOpportunity?.notes || "Add deal context to sharpen the next move."}</p>
+      </section>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Account Snapshot</h2>
+          <span>{accountData.profile.health}</span>
+        </div>
+        <div className="snapshot-grid">
+          <InfoTile label="Score" value={String(accountData.profile.score)} />
+          <InfoTile label="Stage" value={primaryOpportunity?.stage ?? "Prospect"} />
+          <InfoTile label="Open value" value={formatCurrency(primaryOpportunity?.amount ?? 0)} />
+          <InfoTile label="Stakeholders" value={String(stakeholders.length)} />
+        </div>
+      </section>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Recent context</h2>
+          <span>{recentSources.length}</span>
+        </div>
+        <SourceList sources={recentSources} />
+      </section>
+    </div>
+  );
+}
+
+function DealContextTab({
+  accountData,
+  accountName,
+  onAccountUpdate,
+}: {
+  accountData: AccountData;
+  accountName: string;
+  onAccountUpdate: (account: AccountData) => void;
+}) {
+  const [transcriptTitle, setTranscriptTitle] = useState("");
+  const [transcriptDate, setTranscriptDate] = useState("");
+  const [transcriptText, setTranscriptText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [connectorSaving, setConnectorSaving] = useState("");
+  const [error, setError] = useState("");
+
+  async function readFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setTranscriptTitle((current) => current || file.name.replace(/\.[^.]+$/, ""));
+    setTranscriptText(await file.text());
+  }
+
+  async function saveTranscript(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "transcript",
+          accountName,
+          title: transcriptTitle,
+          callDate: transcriptDate,
+          fileName,
+          transcript: transcriptText,
+        }),
+      });
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? "Unable to save transcript.");
+      }
+
+      onAccountUpdate(payload.account);
+      setTranscriptTitle("");
+      setTranscriptDate("");
+      setTranscriptText("");
+      setFileName("");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to save transcript."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function queueConnectorSource(sourceType: "gmail" | "slack") {
+    setConnectorSaving(sourceType);
+    setError("");
+
+    try {
+      const label = sourceType === "gmail" ? "Gmail" : "Slack";
+      const response = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "source",
+          accountName,
+          sourceType,
+          title: `${label} sync requested`,
+          summary: `${label} context lane is ready for connector-backed account history.`,
+        }),
+      });
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? `Unable to queue ${label} sync.`);
+      }
+
+      onAccountUpdate(payload.account);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to queue connector sync."
+      );
+    } finally {
+      setConnectorSaving("");
+    }
+  }
+
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Sync from apps</h2>
+          <span>{accountData.sources.length} sources</span>
+        </div>
+        <div className="connector-grid">
+          <ConnectorCard
+            actionLabel={connectorSaving === "gmail" ? "Queued" : "Queue sync"}
+            disabled={Boolean(connectorSaving)}
+            label="Gmail"
+            onAction={() => void queueConnectorSource("gmail")}
+            status="Connector lane"
+          />
+          <ConnectorCard
+            actionLabel={connectorSaving === "slack" ? "Queued" : "Queue sync"}
+            disabled={Boolean(connectorSaving)}
+            label="Slack"
+            onAction={() => void queueConnectorSource("slack")}
+            status="Connector lane"
+          />
+          <ConnectorCard
+            actionLabel="Ready"
+            disabled
+            label="Gong"
+            status="Transcript upload"
+          />
+        </div>
+      </section>
+
+      <form className="section-block transcript-form" onSubmit={saveTranscript}>
+        <div className="section-head">
+          <h2>Drop call transcripts</h2>
+          <span>{accountData.transcripts.length} calls</span>
+        </div>
+        <label className="file-drop">
+          <input
+            accept=".txt,.vtt,.srt,.md,.csv"
+            onChange={(event) => void readFile(event)}
+            type="file"
+          />
+          <strong>{fileName || "Choose transcript file"}</strong>
+          <span>TXT, VTT, SRT, MD, CSV</span>
+        </label>
+        <div className="form-grid">
+          <label>
+            <span>Call title</span>
+            <input
+              value={transcriptTitle}
+              onChange={(event) => setTranscriptTitle(event.target.value)}
+              placeholder="POC check-in"
+            />
+          </label>
+          <label>
+            <span>Call date</span>
+            <input
+              type="date"
+              value={transcriptDate}
+              onChange={(event) => setTranscriptDate(event.target.value)}
+            />
+          </label>
+        </div>
+        <label>
+          <span>Transcript text</span>
+          <textarea
+            className="transcript-textarea"
+            required
+            value={transcriptText}
+            onChange={(event) => setTranscriptText(event.target.value)}
+            placeholder="Paste transcript text here..."
+          />
+        </label>
+        {error ? <div className="status-banner">{error}</div> : null}
+        <div className="form-actions">
+          <button className="primary-button" disabled={saving} type="submit">
+            {saving ? "Importing" : "Import transcript"}
+          </button>
+        </div>
+      </form>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Imported calls</h2>
+          <span>{accountData.transcripts.length}</span>
+        </div>
+        <TranscriptList transcripts={accountData.transcripts} />
+      </section>
+    </div>
+  );
+}
+
+function StakeholdersTab({
+  accountData,
+  stakeholders,
+}: {
+  accountData: AccountData;
+  stakeholders: string[];
+}) {
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Stakeholder map</h2>
+          <span>{stakeholders.length}</span>
+        </div>
+        {stakeholders.length ? (
+          <div className="person-grid">
+            {stakeholders.map((person) => (
+              <article className="person-card" key={person}>
+                <strong>{person}</strong>
+                <span>Unclassified</span>
+                <p>
+                  Seen across{" "}
+                  {
+                    accountData.transcripts.filter((transcript) =>
+                      transcript.attendees.includes(person)
+                    ).length
+                  }{" "}
+                  call(s)
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No stakeholders extracted yet.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function QuestionsTab({ accountData }: { accountData: AccountData }) {
+  const questions = accountData.transcripts.flatMap((transcript) =>
+    transcript.questions.map((question) => ({
+      ...question,
+      title: transcript.title,
+      callDate: transcript.callDate,
+    }))
+  );
+
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Questions overview</h2>
+          <span>{questions.length}</span>
+        </div>
+        {questions.length ? (
+          <div className="question-list">
+            {questions.map((question, index) => (
+              <article className="question-card" key={`${question.question}-${index}`}>
+                <div>
+                  <strong>{question.question}</strong>
+                  <span>
+                    {question.callDate ? dateLabel(question.callDate) : "No date"} ·{" "}
+                    {question.title}
+                  </span>
+                </div>
+                <span className="risk-pill risk-medium">{question.status}</span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No questions extracted yet.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function PainFitTab({ accountData }: { accountData: AccountData }) {
+  const signals = accountData.transcripts.flatMap((transcript) =>
+    transcript.signals.map((signal) => ({
+      ...signal,
+      title: transcript.title,
+      summary: transcript.summary,
+    }))
+  );
+
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Pain & fit intelligence</h2>
+          <span>{signals.length}</span>
+        </div>
+        {signals.length ? (
+          <div className="signal-grid">
+            {signals.map((signal, index) => (
+              <article className={`signal-card signal-${signal.tone}`} key={index}>
+                <strong>{signal.label}</strong>
+                <span>{signal.title}</span>
+                <p>{signal.summary}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No pain or fit signals extracted yet.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ResearchTab({
+  accountData,
+  accountName,
+  onAccountUpdate,
+}: {
+  accountData: AccountData;
+  accountName: string;
+  onAccountUpdate: (account: AccountData) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function queueResearch() {
+    setSaving(true);
+    const response = await fetch("/api/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "research",
+        accountName,
+        title: "Public account research",
+        summary:
+          "10-Ks, articles, breach notices, leadership changes, public risk signals, and source-backed deal implications.",
+      }),
+    });
+    const payload = (await response.json()) as { account?: AccountData };
+    if (payload.account) {
+      onAccountUpdate(payload.account);
+    }
+    setSaving(false);
+  }
+
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Deep research</h2>
+          <button className="secondary-button" disabled={saving} onClick={queueResearch}>
+            {saving ? "Queued" : "Queue brief"}
+          </button>
+        </div>
+        <div className="research-grid">
+          <InfoTile label="Filings" value="10-K / 10-Q" />
+          <InfoTile label="Security" value="Breach signals" />
+          <InfoTile label="News" value="Recent articles" />
+          <InfoTile label="Deal angle" value="Mapped actions" />
+        </div>
+      </section>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Research briefs</h2>
+          <span>{accountData.researchBriefs.length}</span>
+        </div>
+        {accountData.researchBriefs.length ? (
+          <div className="source-list">
+            {accountData.researchBriefs.map((brief) => (
+              <article className="source-card" key={brief.id}>
+                <span>{brief.status}</span>
+                <strong>{brief.title}</strong>
+                <p>{brief.summary}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No research briefs queued yet.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function GameplanTab({
+  accountData,
+  primaryOpportunity,
+}: {
+  accountData: AccountData;
+  primaryOpportunity: Opportunity | null;
+}) {
+  const openQuestions = accountData.transcripts.flatMap(
+    (transcript) => transcript.questions
+  );
+  const signalCount = accountData.transcripts.reduce(
+    (sum, transcript) => sum + transcript.signals.length,
+    0
+  );
+
+  return (
+    <div className="tab-stack">
+      <section className="insight-panel">
+        <p className="eyebrow">Deal gameplan</p>
+        <h2>
+          {primaryOpportunity?.nextStep ||
+            "Import deal context to generate the next strategic move."}
+        </h2>
+        <p>
+          {signalCount} signal(s), {openQuestions.length} question(s), and{" "}
+          {accountData.sources.length} source(s) are available for planning.
+        </p>
+      </section>
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Risk radar</h2>
+          <span>{primaryOpportunity?.riskLevel ?? "Medium"}</span>
+        </div>
+        <div className="signal-grid">
+          <article className="signal-card signal-risk">
+            <strong>Open questions</strong>
+            <p>{openQuestions.length || "No extracted open questions yet."}</p>
+          </article>
+          <article className="signal-card signal-watch">
+            <strong>Context coverage</strong>
+            <p>{accountData.sources.length} saved source record(s).</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CallsTab({ accountData }: { accountData: AccountData }) {
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Call history</h2>
+          <span>{accountData.transcripts.length}</span>
+        </div>
+        <TranscriptList transcripts={accountData.transcripts} />
+      </section>
+    </div>
+  );
+}
+
+function PlaceholderTab({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="tab-stack">
+      <section className="section-block">
+        <div className="section-head">
+          <h2>{title}</h2>
+          <span>0</span>
+        </div>
+        <div className="empty-state">{value}</div>
+      </section>
+    </div>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -726,6 +1570,97 @@ function Metric({
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <article className="info-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function ConnectorCard({
+  actionLabel,
+  disabled,
+  label,
+  onAction,
+  status,
+}: {
+  actionLabel: string;
+  disabled?: boolean;
+  label: string;
+  onAction?: () => void;
+  status: string;
+}) {
+  return (
+    <article className="connector-card">
+      <div>
+        <strong>{label}</strong>
+        <span>{status}</span>
+      </div>
+      <button
+        className="secondary-button compact-button"
+        disabled={disabled}
+        onClick={onAction}
+        type="button"
+      >
+        {actionLabel}
+      </button>
+    </article>
+  );
+}
+
+function SourceList({ sources }: { sources: ContextSource[] }) {
+  if (!sources.length) {
+    return <div className="empty-state">No saved sources yet.</div>;
+  }
+
+  return (
+    <div className="source-list">
+      {sources.map((source) => (
+        <article className="source-card" key={source.id}>
+          <span>{source.sourceType}</span>
+          <strong>{source.title}</strong>
+          <p>{source.summary || "No summary captured."}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function TranscriptList({ transcripts }: { transcripts: CallTranscript[] }) {
+  if (!transcripts.length) {
+    return <div className="empty-state">No transcripts imported yet.</div>;
+  }
+
+  return (
+    <div className="transcript-list">
+      {transcripts.map((transcript) => (
+        <article className="transcript-card" key={transcript.id}>
+          <div className="transcript-card-head">
+            <div>
+              <span>{transcript.callDate ? dateLabel(transcript.callDate) : "No date"}</span>
+              <strong>{transcript.title}</strong>
+            </div>
+            <span>{transcript.questions.length} Qs</span>
+          </div>
+          <p>{transcript.summary}</p>
+          <div className="tag-row">
+            {transcript.attendees.slice(0, 6).map((attendee) => (
+              <span key={attendee}>{attendee}</span>
+            ))}
+          </div>
+          <div className="tag-row">
+            {transcript.signals.map((signal) => (
+              <span key={`${signal.label}-${signal.tone}`}>{signal.label}</span>
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 
