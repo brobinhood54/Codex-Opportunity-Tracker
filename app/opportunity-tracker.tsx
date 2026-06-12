@@ -15,6 +15,7 @@ type Stage =
   | "Discovery"
   | "Qualified"
   | "Solution"
+  | "POV"
   | "Proposal"
   | "Negotiation"
   | "Commit";
@@ -47,6 +48,13 @@ type Opportunity = {
   nextStepDate: string;
   riskLevel: RiskLevel;
   notes: string;
+  salesforceOpportunityId?: string;
+  salesforceAccountId?: string;
+  accountWebsite?: string;
+  industry?: string;
+  forecastCategory?: string;
+  lastActivityDate?: string;
+  sourceSystem?: string;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -67,6 +75,8 @@ type AccountProfile = {
   health: string;
   score: number;
   notes: string;
+  salesforceAccountId?: string;
+  accountWebsite?: string;
 };
 
 type ContextSource = {
@@ -122,7 +132,8 @@ type AccountData = {
 const STAGES: { id: Stage; progress: number; accent: string }[] = [
   { id: "Discovery", progress: 15, accent: "#58c7e2" },
   { id: "Qualified", progress: 35, accent: "#64eba7" },
-  { id: "Solution", progress: 55, accent: "#9f8cff" },
+  { id: "Solution", progress: 45, accent: "#9f8cff" },
+  { id: "POV", progress: 55, accent: "#5eead4" },
   { id: "Proposal", progress: 70, accent: "#f0b33e" },
   { id: "Negotiation", progress: 85, accent: "#ef7b67" },
   { id: "Commit", progress: 95, accent: "#73e3a7" },
@@ -242,6 +253,8 @@ export default function OpportunityTracker() {
   const [accountLoading, setAccountLoading] = useState(false);
   const [accountError, setAccountError] = useState("");
   const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [importingCsv, setImportingCsv] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
   const selectedIdRef = useRef<number | null>(null);
 
   const selected = useMemo(
@@ -397,6 +410,66 @@ export default function OpportunityTracker() {
     setAccountError("");
     setActiveTab("overview");
     void loadOpportunities();
+  }
+
+  async function importSalesforceCsv(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setImportingCsv(true);
+    setImportMessage("");
+    setError("");
+
+    try {
+      const csvText = await file.text();
+      const response = await fetch("/api/opportunities/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csvText }),
+      });
+      const payload = (await response.json()) as {
+        created?: number;
+        error?: string;
+        importedIds?: number[];
+        opportunities?: Opportunity[];
+        skipped?: number;
+        updated?: number;
+      };
+
+      if (!response.ok || !payload.opportunities) {
+        throw new Error(payload.error ?? "Unable to import Salesforce CSV.");
+      }
+
+      const rows = payload.opportunities;
+      const importedId = payload.importedIds?.[0] ?? rows[0]?.id ?? null;
+      const importedOpportunity =
+        rows.find((row) => row.id === importedId) ?? rows[0] ?? null;
+
+      setOpportunities(rows);
+      setSelectedId(importedOpportunity?.id ?? null);
+      selectedIdRef.current = importedOpportunity?.id ?? null;
+      setDraft(importedOpportunity ? toDraft(importedOpportunity) : EMPTY_DRAFT);
+      setImportMessage(
+        `Imported ${payload.created ?? 0} new and updated ${
+          payload.updated ?? 0
+        }.`
+      );
+
+      if (importedOpportunity && rows.length === 1) {
+        setAccountName(importedOpportunity.accountName);
+        setActiveTab("context");
+        void loadAccount(importedOpportunity.accountName);
+      }
+    } catch (importError) {
+      setError(
+        importError instanceof Error
+          ? importError.message
+          : "Unable to import Salesforce CSV."
+      );
+    } finally {
+      setImportingCsv(false);
+    }
   }
 
   async function saveOpportunity(event: FormEvent<HTMLFormElement>) {
@@ -556,6 +629,15 @@ export default function OpportunityTracker() {
           <h1>Open opportunities</h1>
         </div>
         <div className="topbar-actions">
+          <label className="secondary-button import-button">
+            {importingCsv ? "Importing" : "Import CSV"}
+            <input
+              accept=".csv,text/csv"
+              disabled={importingCsv}
+              onChange={(event) => void importSalesforceCsv(event)}
+              type="file"
+            />
+          </label>
           <button className="secondary-button" onClick={refreshOpportunities}>
             Refresh
           </button>
@@ -662,6 +744,9 @@ export default function OpportunityTracker() {
       </section>
 
       {error ? <div className="status-banner">{error}</div> : null}
+      {importMessage ? (
+        <div className="status-banner success-banner">{importMessage}</div>
+      ) : null}
 
       <div className="workspace">
         <section className="opportunity-area">

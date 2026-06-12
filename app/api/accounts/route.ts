@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import {
   accountProfiles,
@@ -11,6 +11,32 @@ import {
 type ContextSourceInsert = typeof contextSources.$inferInsert;
 
 const SOURCE_TYPES = ["manual", "gmail", "slack", "transcript", "file"] as const;
+const MONTHS: Record<string, string> = {
+  jan: "01",
+  january: "01",
+  feb: "02",
+  february: "02",
+  mar: "03",
+  march: "03",
+  apr: "04",
+  april: "04",
+  may: "05",
+  jun: "06",
+  june: "06",
+  jul: "07",
+  july: "07",
+  aug: "08",
+  august: "08",
+  sep: "09",
+  sept: "09",
+  september: "09",
+  oct: "10",
+  october: "10",
+  nov: "11",
+  november: "11",
+  dec: "12",
+  december: "12",
+};
 
 function routeError(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
@@ -51,6 +77,16 @@ function normalizeDate(value: unknown) {
     )}`;
   }
 
+  const namedDate = text.match(
+    /\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(20\d{2})\b/
+  );
+  if (namedDate) {
+    const month = MONTHS[namedDate[1].toLowerCase()];
+    if (month) {
+      return `${namedDate[3]}-${month}-${namedDate[2].padStart(2, "0")}`;
+    }
+  }
+
   return "";
 }
 
@@ -71,7 +107,11 @@ function tryJsonArray(value: string) {
 }
 
 function stripExtension(name: string) {
-  return name.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").trim();
+  return name
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/^call[-_\s]*transcript[-_\s]*/i, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
 }
 
 function firstSentences(text: string, limit = 2) {
@@ -90,7 +130,62 @@ function detectDate(text: string) {
   const slash = text.match(/\b(\d{1,2}\/\d{1,2}\/(?:20)?\d{2})\b/);
   if (slash) return normalizeDate(slash[1]);
 
+  const named = text.match(
+    /\b(?:recorded on\s+)?([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+20\d{2})\b/i
+  );
+  if (named) return normalizeDate(named[1]);
+
   return "";
+}
+
+function dedupePeople(names: string[]) {
+  const unique = Array.from(
+    new Set(names.map((name) => name.trim()).filter(Boolean))
+  );
+  return unique.filter((name) => {
+    const normalized = name.toLowerCase();
+    return !unique.some((other) => {
+      const otherNormalized = other.toLowerCase();
+      return (
+        otherNormalized !== normalized &&
+        otherNormalized.startsWith(`${normalized} `)
+      );
+    });
+  });
+}
+
+function detectCustomerNames(text: string) {
+  const participantsBlock =
+    text.match(/(?:^|\n)\s*participants\s*\n([\s\S]*?)(?:\n\s*transcript\b|$)/i)
+      ?.[1] ?? "";
+  const names: string[] = [];
+  let sectionIndex = -1;
+
+  for (const rawLine of participantsBlock.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    if (!line.includes(",")) {
+      sectionIndex += 1;
+      continue;
+    }
+
+    if (sectionIndex > 0) {
+      names.push(line.split(",")[0].trim());
+    }
+  }
+
+  return dedupePeople(names);
+}
+
+function speakerMatchesPerson(speaker: string, person: string) {
+  const normalizedSpeaker = speaker.toLowerCase();
+  const normalizedPerson = person.toLowerCase();
+  return (
+    normalizedPerson === normalizedSpeaker ||
+    normalizedPerson.startsWith(`${normalizedSpeaker} `) ||
+    normalizedSpeaker.startsWith(`${normalizedPerson} `)
+  );
 }
 
 function detectAttendees(text: string) {
@@ -117,24 +212,140 @@ function detectAttendees(text: string) {
     )
   );
 
-  return Array.from(new Set([...fromLine, ...speakerNames])).slice(0, 12);
+  const timestampSpeakers = text
+    .split("\n")
+    .map((line) =>
+      line.match(/^\s*\d{1,2}:\d{2}(?::\d{2})?\s*\|\s*([A-Z][A-Za-z .'-]{1,48})\s*$/)
+    )
+    .map((match) => match?.[1]?.trim())
+    .filter((name): name is string => Boolean(name));
+
+  const participantsBlock =
+    text.match(/(?:^|\n)\s*participants\s*\n([\s\S]*?)(?:\n\s*transcript\b|$)/i)
+      ?.[1] ?? "";
+  const participantNames = participantsBlock
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes(","))
+    .map((line) => line.split(",")[0].trim())
+    .filter((name) => /^[A-Z][A-Za-z .'-]{1,60}$/.test(name));
+
+  return dedupePeople([
+    ...fromLine,
+    ...participantNames,
+    ...speakerNames,
+    ...timestampSpeakers,
+  ]).slice(0, 16);
 }
 
-function detectQuestions(text: string) {
-  const questions = text
-    .split(/\n+/)
-    .flatMap((line) =>
-      line
-        .replace(/^\s*([A-Z][A-Za-z .'-]{1,48}):\s*/, "")
-        .split(/(?<=\?)\s+/)
-    )
+function isNoisyQuestion(question: string) {
+  const normalized = question.toLowerCase();
+  return [
+    "are we ready to rock",
+    "background here real quick",
+    "call recorded",
+    "camera",
+    "customer?",
+    "flight back",
+    "happy monday",
+    "made it back",
+    "put it on",
+    "seventeenth",
+    "teams meeting",
+    "the news or not",
+    "time of day",
+    "the option to use teams",
+    "what's going on",
+    "way back",
+  ].some((phrase) => normalized.includes(phrase));
+}
+
+function extractSpeakerTurns(text: string) {
+  const turns: { speaker: string; text: string }[] = [];
+  let currentSpeaker = "";
+  let currentText: string[] = [];
+
+  function pushTurn() {
+    if (currentSpeaker && currentText.length) {
+      turns.push({
+        speaker: currentSpeaker,
+        text: currentText.join(" ").replace(/\s+/g, " ").trim(),
+      });
+    }
+  }
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const timestampSpeaker = line.match(
+      /^\d{1,2}:\d{2}(?::\d{2})?\s*\|\s*([A-Z][A-Za-z .'-]{1,48})\s*$/
+    );
+    const colonSpeaker = line.match(/^([A-Z][A-Za-z .'-]{1,48}):\s*(.+)$/);
+
+    if (timestampSpeaker) {
+      pushTurn();
+      currentSpeaker = timestampSpeaker[1].trim();
+      currentText = [];
+      continue;
+    }
+
+    if (colonSpeaker) {
+      pushTurn();
+      currentSpeaker = colonSpeaker[1].trim();
+      currentText = [colonSpeaker[2].trim()];
+      continue;
+    }
+
+    if (currentSpeaker) {
+      currentText.push(line);
+    }
+  }
+
+  pushTurn();
+  return turns;
+}
+
+function questionFragments(text: string) {
+  return text
+    .split(/(?<=\?)\s+/)
     .map((question) => question.replace(/\s+/g, " ").trim())
     .filter(
       (question) =>
         question.endsWith("?") &&
         question.length >= 18 &&
+        !isNoisyQuestion(question) &&
         !/^(attendees|participants|speakers)\s*:/i.test(question)
     );
+}
+
+function detectQuestions(text: string) {
+  const customerNames = detectCustomerNames(text);
+  const turns = extractSpeakerTurns(text);
+  const customerQuestions = customerNames.length
+    ? turns
+        .filter((turn) =>
+          customerNames.some((person) =>
+            speakerMatchesPerson(turn.speaker, person)
+          )
+        )
+        .flatMap((turn) => questionFragments(turn.text))
+    : [];
+
+  const questions = customerQuestions.length
+    ? customerQuestions
+    : text
+        .split(/\n+/)
+        .flatMap((line) =>
+          questionFragments(
+            line
+              .replace(
+                /^\s*\d{1,2}:\d{2}(?::\d{2})?\s*\|\s*([A-Z][A-Za-z .'-]{1,48})\s*/,
+                ""
+              )
+              .replace(/^\s*([A-Z][A-Za-z .'-]{1,48}):\s*/, "")
+          )
+        );
 
   return Array.from(new Set(questions))
     .slice(0, 12)
@@ -227,7 +438,9 @@ async function ensureProfile(accountName: string) {
     .insert(accountProfiles)
     .values({
       accountName,
-      industry: "Unknown",
+      industry: opportunity?.industry || "Unknown",
+      accountWebsite: opportunity?.accountWebsite ?? "",
+      salesforceAccountId: opportunity?.salesforceAccountId ?? "",
       health: opportunity?.riskLevel === "High" ? "At Risk" : "Active",
       score: opportunity?.progress ?? 35,
       updatedAt: new Date().toISOString(),
@@ -343,6 +556,25 @@ export async function POST(request: Request) {
       });
 
       const db = getDb();
+      const [duplicate] = await db
+        .select()
+        .from(callTranscripts)
+        .where(
+          and(
+            eq(callTranscripts.accountName, accountName),
+            eq(callTranscripts.title, parsed.title),
+            eq(callTranscripts.callDate, parsed.callDate)
+          )
+        )
+        .limit(1);
+
+      if (duplicate) {
+        return Response.json({
+          account: await readAccount(accountName),
+          skipped: true,
+        });
+      }
+
       await db.insert(callTranscripts).values({
         accountName,
         title: parsed.title,

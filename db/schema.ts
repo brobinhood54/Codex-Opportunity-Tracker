@@ -17,6 +17,15 @@ export const opportunities = sqliteTable(
     nextStepDate: text("next_step_date").notNull().default(""),
     riskLevel: text("risk_level").notNull().default("Medium"),
     notes: text("notes").notNull().default(""),
+    salesforceOpportunityId: text("salesforce_opportunity_id")
+      .notNull()
+      .default(""),
+    salesforceAccountId: text("salesforce_account_id").notNull().default(""),
+    accountWebsite: text("account_website").notNull().default(""),
+    industry: text("industry").notNull().default(""),
+    forecastCategory: text("forecast_category").notNull().default(""),
+    lastActivityDate: text("last_activity_date").notNull().default(""),
+    sourceSystem: text("source_system").notNull().default("manual"),
     status: text("status").notNull().default("open"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -25,6 +34,12 @@ export const opportunities = sqliteTable(
     statusIdx: index("opportunities_status_idx").on(table.status),
     stageIdx: index("opportunities_stage_idx").on(table.stage),
     closeDateIdx: index("opportunities_close_date_idx").on(table.closeDate),
+    salesforceOpportunityIdx: index(
+      "opportunities_salesforce_opportunity_idx"
+    ).on(table.salesforceOpportunityId),
+    salesforceAccountIdx: index("opportunities_salesforce_account_idx").on(
+      table.salesforceAccountId
+    ),
   })
 );
 
@@ -38,6 +53,8 @@ export const accountProfiles = sqliteTable(
     health: text("health").notNull().default("At Risk"),
     score: integer("score").notNull().default(35),
     notes: text("notes").notNull().default(""),
+    salesforceAccountId: text("salesforce_account_id").notNull().default(""),
+    accountWebsite: text("account_website").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },

@@ -6,6 +6,7 @@ const STAGES = [
   "Discovery",
   "Qualified",
   "Solution",
+  "POV",
   "Proposal",
   "Negotiation",
   "Commit",
@@ -16,7 +17,8 @@ const RISK_LEVELS = ["Low", "Medium", "High"] as const;
 const STAGE_PROGRESS: Record<(typeof STAGES)[number], number> = {
   Discovery: 15,
   Qualified: 35,
-  Solution: 55,
+  Solution: 45,
+  POV: 55,
   Proposal: 70,
   Negotiation: 85,
   Commit: 95,
@@ -65,6 +67,7 @@ function cleanText(value: unknown, fallback = "", maxLength = 240) {
 
 function normalizeStage(value: unknown) {
   const stage = cleanText(value, "Discovery", 40);
+  if (/pov|proof|pilot/i.test(stage)) return "POV";
   return STAGES.includes(stage as (typeof STAGES)[number])
     ? (stage as (typeof STAGES)[number])
     : "Discovery";
@@ -134,6 +137,17 @@ export async function POST(request: Request) {
         nextStepDate: normalizeDate(payload.nextStepDate),
         riskLevel: normalizeRisk(payload.riskLevel),
         notes: cleanText(payload.notes, "", 1000),
+        salesforceOpportunityId: cleanText(
+          payload.salesforceOpportunityId,
+          "",
+          80
+        ),
+        salesforceAccountId: cleanText(payload.salesforceAccountId, "", 80),
+        accountWebsite: cleanText(payload.accountWebsite, "", 240),
+        industry: cleanText(payload.industry, "", 120),
+        forecastCategory: cleanText(payload.forecastCategory, "", 80),
+        lastActivityDate: normalizeDate(payload.lastActivityDate),
+        sourceSystem: cleanText(payload.sourceSystem, "manual", 40),
         status: "open",
         updatedAt: new Date().toISOString(),
       })
@@ -196,6 +210,28 @@ export async function PATCH(request: Request) {
     }
     if ("notes" in payload) {
       updates.notes = cleanText(payload.notes, "", 1000);
+    }
+    if ("salesforceOpportunityId" in payload) {
+      updates.salesforceOpportunityId = cleanText(
+        payload.salesforceOpportunityId,
+        "",
+        80
+      );
+    }
+    if ("salesforceAccountId" in payload) {
+      updates.salesforceAccountId = cleanText(payload.salesforceAccountId, "", 80);
+    }
+    if ("accountWebsite" in payload) {
+      updates.accountWebsite = cleanText(payload.accountWebsite, "", 240);
+    }
+    if ("industry" in payload) {
+      updates.industry = cleanText(payload.industry, "", 120);
+    }
+    if ("forecastCategory" in payload) {
+      updates.forecastCategory = cleanText(payload.forecastCategory, "", 80);
+    }
+    if ("lastActivityDate" in payload) {
+      updates.lastActivityDate = normalizeDate(payload.lastActivityDate);
     }
 
     const [opportunity] = await getDb()

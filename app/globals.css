@@ -220,7 +220,7 @@ label span {
 .stage-strip {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(6, minmax(108px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
 }
 
 .stage-chip {
@@ -358,7 +358,7 @@ input[type="range"] {
 .board {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(6, minmax(210px, 1fr));
+  grid-template-columns: repeat(7, minmax(210px, 1fr));
   overflow-x: auto;
   padding-bottom: 8px;
 }
@@ -1006,6 +1006,25 @@ tbody tr:hover {
 
 .account-shell .status-banner {
   margin: 14px 28px 0;
+}
+
+.import-button {
+  position: relative;
+}
+
+.import-button input {
+  height: 1px;
+  opacity: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
+}
+
+.success-banner {
+  background: rgba(95, 230, 166, 0.1);
+  border-color: rgba(95, 230, 166, 0.24);
+  color: #73e3a7;
 }
 
 .dashboard-shell {
