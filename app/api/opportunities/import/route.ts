@@ -9,22 +9,22 @@ import {
 type OpportunityInsert = typeof opportunities.$inferInsert;
 
 type StageId =
+  | "Qualification"
   | "Discovery"
-  | "Qualified"
-  | "Solution"
+  | "POV Planning"
   | "POV"
-  | "Proposal"
-  | "Negotiation"
-  | "Commit";
+  | "Decision / Negotiations"
+  | "Legal / Procurement"
+  | "Closed";
 
 const STAGE_PROGRESS: Record<StageId, number> = {
-  Discovery: 15,
-  Qualified: 35,
-  Solution: 45,
-  POV: 55,
-  Proposal: 70,
-  Negotiation: 85,
-  Commit: 95,
+  Qualification: 15,
+  Discovery: 30,
+  "POV Planning": 45,
+  POV: 60,
+  "Decision / Negotiations": 75,
+  "Legal / Procurement": 88,
+  Closed: 100,
 };
 
 function routeError(error: unknown) {
@@ -74,25 +74,41 @@ function normalizeDate(value: unknown) {
 }
 
 function normalizeStage(value: unknown): StageId {
-  const text = cleanText(value, "Discovery", 80).toLowerCase();
+  const text = cleanText(value, "Qualification", 80).toLowerCase();
+  if (text.includes("closed") || text.includes("commit")) return "Closed";
+  if (
+    text.includes("legal") ||
+    text.includes("procurement") ||
+    text.includes("contract") ||
+    text.includes("redline")
+  ) {
+    return "Legal / Procurement";
+  }
+  if (
+    text.includes("decision") ||
+    text.includes("negotiation") ||
+    text.includes("proposal") ||
+    text.includes("quote") ||
+    text.includes("pricing")
+  ) {
+    return "Decision / Negotiations";
+  }
+  if (
+    text.includes("pov planning") ||
+    text.includes("proof planning") ||
+    text.includes("pilot planning") ||
+    text.includes("planning")
+  ) {
+    return "POV Planning";
+  }
   if (text.includes("pov") || text.includes("proof") || text.includes("pilot")) {
     return "POV";
   }
-  if (text.includes("proposal") || text.includes("quote")) return "Proposal";
-  if (
-    text.includes("negotiation") ||
-    text.includes("procurement") ||
-    text.includes("legal") ||
-    text.includes("contract")
-  ) {
-    return "Negotiation";
-  }
-  if (text.includes("commit") || text.includes("closed won")) return "Commit";
-  if (text.includes("qual")) return "Qualified";
-  if (text.includes("solution") || text.includes("demo")) return "Solution";
+  if (text.includes("solution") || text.includes("demo")) return "POV Planning";
   if (text.includes("discover") || text.includes("prospect")) return "Discovery";
+  if (text.includes("qual")) return "Qualification";
 
-  return "Discovery";
+  return "Qualification";
 }
 
 function parseCsv(text: string) {
@@ -186,7 +202,11 @@ async function upsertAccountProfile(values: {
     accountWebsite: values.accountWebsite,
     industry: values.industry || "Unknown",
     salesforceAccountId: values.salesforceAccountId,
-    health: values.stage === "Negotiation" ? "At Risk" : "Active",
+    health:
+      values.stage === "Decision / Negotiations" ||
+      values.stage === "Legal / Procurement"
+        ? "At Risk"
+        : "Active",
     score: values.progress,
     updatedAt: new Date().toISOString(),
   };

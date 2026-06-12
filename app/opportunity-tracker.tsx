@@ -12,13 +12,13 @@ import {
 } from "react";
 
 type Stage =
+  | "Qualification"
   | "Discovery"
-  | "Qualified"
-  | "Solution"
+  | "POV Planning"
   | "POV"
-  | "Proposal"
-  | "Negotiation"
-  | "Commit";
+  | "Decision / Negotiations"
+  | "Legal / Procurement"
+  | "Closed";
 
 type RiskLevel = "Low" | "Medium" | "High";
 type TabId =
@@ -129,14 +129,24 @@ type AccountData = {
   researchBriefs: ResearchBrief[];
 };
 
-const STAGES: { id: Stage; progress: number; accent: string }[] = [
-  { id: "Discovery", progress: 15, accent: "#58c7e2" },
-  { id: "Qualified", progress: 35, accent: "#64eba7" },
-  { id: "Solution", progress: 45, accent: "#9f8cff" },
-  { id: "POV", progress: 55, accent: "#5eead4" },
-  { id: "Proposal", progress: 70, accent: "#f0b33e" },
-  { id: "Negotiation", progress: 85, accent: "#ef7b67" },
-  { id: "Commit", progress: 95, accent: "#73e3a7" },
+const STAGES: { id: Stage; label: string; progress: number; accent: string }[] = [
+  { id: "Qualification", label: "1. Qualification", progress: 15, accent: "#64eba7" },
+  { id: "Discovery", label: "2. Discovery", progress: 30, accent: "#58c7e2" },
+  { id: "POV Planning", label: "3. POV Planning", progress: 45, accent: "#9f8cff" },
+  { id: "POV", label: "4. POV", progress: 60, accent: "#5eead4" },
+  {
+    id: "Decision / Negotiations",
+    label: "5. Decision / Negotiations",
+    progress: 75,
+    accent: "#f0b33e",
+  },
+  {
+    id: "Legal / Procurement",
+    label: "6. Legal / Procurement",
+    progress: 88,
+    accent: "#ef7b67",
+  },
+  { id: "Closed", label: "7. Closed", progress: 100, accent: "#73e3a7" },
 ];
 
 const ACCOUNT_TABS: { id: TabId; label: string }[] = [
@@ -157,7 +167,7 @@ const EMPTY_DRAFT: Draft = {
   accountName: "",
   opportunityName: "",
   owner: "",
-  stage: "Discovery",
+  stage: "Qualification",
   amount: "",
   probability: 25,
   progress: 15,
@@ -231,6 +241,10 @@ function stagePosition(stage: Stage) {
 function nextStage(stage: Stage) {
   const index = stagePosition(stage);
   return STAGES[Math.min(index + 1, STAGES.length - 1)].id;
+}
+
+function stageLabel(stage: Stage | string) {
+  return STAGES.find((item) => item.id === stage)?.label ?? stage;
 }
 
 function uniqueValues(values: string[]) {
@@ -675,7 +689,7 @@ export default function OpportunityTracker() {
                   }
                   style={{ "--accent": stage.accent } as CSSProperties}
                 >
-                  <span>{stage.id}</span>
+                  <span>{stage.label}</span>
                   <strong>{count}</strong>
                 </button>
               );
@@ -708,7 +722,7 @@ export default function OpportunityTracker() {
             <option value="All">All stages</option>
             {STAGES.map((stage) => (
               <option key={stage.id} value={stage.id}>
-                {stage.id}
+                {stage.label}
               </option>
             ))}
           </select>
@@ -850,7 +864,7 @@ export default function OpportunityTracker() {
                 >
                   {STAGES.map((stage) => (
                     <option key={stage.id} value={stage.id}>
-                      {stage.id}
+                      {stage.label}
                     </option>
                   ))}
                 </select>
@@ -945,7 +959,7 @@ export default function OpportunityTracker() {
                 <>
                   <button
                     className="secondary-button"
-                    disabled={saving || selected.stage === "Commit"}
+                    disabled={saving || selected.stage === "Closed"}
                     onClick={() => void advanceSelected()}
                     type="button"
                   >
@@ -1032,7 +1046,9 @@ function AccountView({
             <h1>{accountName}</h1>
             <div className="account-badges">
               <span>{accountData?.profile.industry ?? "Unknown"}</span>
-              <span>{primaryOpportunity?.stage ?? "Prospect"}</span>
+              <span>
+                {primaryOpportunity ? stageLabel(primaryOpportunity.stage) : "Prospect"}
+              </span>
               <span>{accountData?.profile.health ?? "Loading"}</span>
             </div>
           </div>
@@ -1201,7 +1217,10 @@ function OverviewTab({
         </div>
         <div className="snapshot-grid">
           <InfoTile label="Score" value={String(accountData.profile.score)} />
-          <InfoTile label="Stage" value={primaryOpportunity?.stage ?? "Prospect"} />
+          <InfoTile
+            label="Stage"
+            value={primaryOpportunity ? stageLabel(primaryOpportunity.stage) : "Prospect"}
+          />
           <InfoTile label="Open value" value={formatCurrency(primaryOpportunity?.amount ?? 0)} />
           <InfoTile label="Stakeholders" value={String(stakeholders.length)} />
         </div>
@@ -1807,7 +1826,7 @@ function Board({
               className="lane-head"
               style={{ "--accent": stage.accent } as CSSProperties}
             >
-              <span>{stage.id}</span>
+              <span>{stage.label}</span>
               <strong>{rows.length}</strong>
             </div>
             <div className="lane-list">
@@ -1877,7 +1896,7 @@ function Table({
                 <strong>{item.accountName}</strong>
                 <span>{item.opportunityName}</span>
               </td>
-              <td>{item.stage}</td>
+              <td>{stageLabel(item.stage)}</td>
               <td>
                 <strong>{formatCurrency(item.amount)}</strong>
                 <span>{item.probability}% weighted</span>

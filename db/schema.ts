@@ -8,7 +8,7 @@ export const opportunities = sqliteTable(
     accountName: text("account_name").notNull(),
     opportunityName: text("opportunity_name").notNull(),
     owner: text("owner").notNull().default(""),
-    stage: text("stage").notNull().default("Discovery"),
+    stage: text("stage").notNull().default("Qualification"),
     amount: integer("amount").notNull().default(0),
     probability: integer("probability").notNull().default(20),
     progress: integer("progress").notNull().default(15),

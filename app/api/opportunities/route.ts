@@ -3,25 +3,25 @@ import { getDb } from "../../../db";
 import { opportunities } from "../../../db/schema";
 
 const STAGES = [
+  "Qualification",
   "Discovery",
-  "Qualified",
-  "Solution",
+  "POV Planning",
   "POV",
-  "Proposal",
-  "Negotiation",
-  "Commit",
+  "Decision / Negotiations",
+  "Legal / Procurement",
+  "Closed",
 ] as const;
 
 const RISK_LEVELS = ["Low", "Medium", "High"] as const;
 
 const STAGE_PROGRESS: Record<(typeof STAGES)[number], number> = {
-  Discovery: 15,
-  Qualified: 35,
-  Solution: 45,
-  POV: 55,
-  Proposal: 70,
-  Negotiation: 85,
-  Commit: 95,
+  Qualification: 15,
+  Discovery: 30,
+  "POV Planning": 45,
+  POV: 60,
+  "Decision / Negotiations": 75,
+  "Legal / Procurement": 88,
+  Closed: 100,
 };
 
 type OpportunityInsert = typeof opportunities.$inferInsert;
@@ -66,11 +66,32 @@ function cleanText(value: unknown, fallback = "", maxLength = 240) {
 }
 
 function normalizeStage(value: unknown) {
-  const stage = cleanText(value, "Discovery", 40);
-  if (/pov|proof|pilot/i.test(stage)) return "POV";
+  const stage = cleanText(value, "Qualification", 80);
+  const normalized = stage.toLowerCase();
+  if (
+    STAGES.includes(stage as (typeof STAGES)[number])
+  ) {
+    return stage as (typeof STAGES)[number];
+  }
+  if (/closed|closed won|closed lost|commit/.test(normalized)) return "Closed";
+  if (/legal|procurement|contract|redline|paperwork/.test(normalized)) {
+    return "Legal / Procurement";
+  }
+  if (/decision|negotiat|proposal|quote|pricing/.test(normalized)) {
+    return "Decision / Negotiations";
+  }
+  if (/pov planning|proof planning|pilot planning|planning/.test(normalized)) {
+    return "POV Planning";
+  }
+  if (/pov|proof|pilot/.test(normalized)) return "POV";
+  if (/solution|demo|technical validation/.test(normalized)) {
+    return "POV Planning";
+  }
+  if (/discover|prospect/.test(normalized)) return "Discovery";
+  if (/qual/.test(normalized)) return "Qualification";
   return STAGES.includes(stage as (typeof STAGES)[number])
     ? (stage as (typeof STAGES)[number])
-    : "Discovery";
+    : "Qualification";
 }
 
 function normalizeRisk(value: unknown) {

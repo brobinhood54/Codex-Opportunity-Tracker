@@ -220,7 +220,7 @@ label span {
 .stage-strip {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .stage-chip {
@@ -229,6 +229,7 @@ label span {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: flex;
+  gap: 8px;
   height: 46px;
   justify-content: space-between;
   padding: 0 12px;
@@ -245,12 +246,20 @@ label span {
 .stage-chip span {
   color: var(--ink);
   flex: 1;
+  font-size: 0.8rem;
+  min-width: 0;
   padding-left: 8px;
 }
 
 .stage-chip strong {
+  background: rgba(113, 129, 153, 0.14);
+  border-radius: 999px;
   color: var(--muted);
+  flex-shrink: 0;
   font-size: 0.86rem;
+  min-width: 20px;
+  padding: 1px 6px;
+  text-align: center;
 }
 
 .stage-chip-active {
@@ -358,7 +367,7 @@ input[type="range"] {
 .board {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(7, minmax(210px, 1fr));
+  grid-template-columns: repeat(7, minmax(220px, 1fr));
   overflow-x: auto;
   padding-bottom: 8px;
 }
@@ -368,7 +377,7 @@ input[type="range"] {
   border: 1px solid var(--line);
   border-radius: 8px;
   min-height: 420px;
-  min-width: 210px;
+  min-width: 220px;
   padding: 10px;
 }
 
@@ -1076,7 +1085,12 @@ tbody tr:hover {
 }
 
 .dashboard-shell .stage-chip strong {
+  background: rgba(113, 129, 153, 0.16);
+  border-radius: 999px;
   color: #718199;
+  min-width: 20px;
+  padding: 1px 6px;
+  text-align: center;
 }
 
 .dashboard-shell .stage-chip-active {
