@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { opportunities } from "../../../db/schema";
 
@@ -23,65 +23,6 @@ const STAGE_PROGRESS: Record<(typeof STAGES)[number], number> = {
 };
 
 type OpportunityInsert = typeof opportunities.$inferInsert;
-
-const seedOpportunities: OpportunityInsert[] = [
-  {
-    accountName: "Northstar Health",
-    opportunityName: "Care operations expansion",
-    owner: "Morgan",
-    stage: "Proposal",
-    amount: 185000,
-    probability: 68,
-    progress: 72,
-    closeDate: "2026-07-18",
-    nextStep: "Send revised implementation plan",
-    nextStepDate: "2026-06-14",
-    riskLevel: "Medium",
-    notes: "Budget owner asked for a tighter rollout sequence.",
-  },
-  {
-    accountName: "Atlas Robotics",
-    opportunityName: "Enterprise platform pilot",
-    owner: "Riley",
-    stage: "Negotiation",
-    amount: 320000,
-    probability: 76,
-    progress: 84,
-    closeDate: "2026-06-28",
-    nextStep: "Confirm security review owner",
-    nextStepDate: "2026-06-12",
-    riskLevel: "High",
-    notes: "Legal is engaged; security questions are the remaining blocker.",
-  },
-  {
-    accountName: "Brightline Foods",
-    opportunityName: "Regional account rollout",
-    owner: "Avery",
-    stage: "Qualified",
-    amount: 92000,
-    probability: 42,
-    progress: 38,
-    closeDate: "2026-08-09",
-    nextStep: "Map buying committee",
-    nextStepDate: "2026-06-17",
-    riskLevel: "Low",
-    notes: "Operational sponsor is strong; finance not yet involved.",
-  },
-  {
-    accountName: "Cobalt Bank",
-    opportunityName: "Risk workflow modernization",
-    owner: "Jordan",
-    stage: "Solution",
-    amount: 440000,
-    probability: 54,
-    progress: 58,
-    closeDate: "2026-09-03",
-    nextStep: "Share reference architecture",
-    nextStepDate: "2026-06-20",
-    riskLevel: "Medium",
-    notes: "Needs a sharper success plan before proposal.",
-  },
-];
 
 function toRouteErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
@@ -141,20 +82,8 @@ function normalizeDate(value: unknown) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
 }
 
-async function ensureSeedData() {
-  const db = getDb();
-  const [result] = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(opportunities);
-
-  if (Number(result?.count ?? 0) === 0) {
-    await db.insert(opportunities).values(seedOpportunities);
-  }
-}
-
 export async function GET() {
   try {
-    await ensureSeedData();
     const db = getDb();
     const rows = await db
       .select()

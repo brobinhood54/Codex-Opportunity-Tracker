@@ -1008,6 +1008,196 @@ tbody tr:hover {
   margin: 14px 28px 0;
 }
 
+.dashboard-shell {
+  max-width: none;
+  padding: 0;
+}
+
+.dashboard-shell .topbar {
+  background: #0f1726;
+  border-bottom: 1px solid rgba(137, 151, 174, 0.14);
+  margin: 0;
+  min-height: 96px;
+  padding: 18px 28px;
+}
+
+.dashboard-shell .topbar h1,
+.dashboard-shell .detail-head h2 {
+  color: #f8fbff;
+  font-weight: 780;
+}
+
+.dashboard-shell .overview-band {
+  background: #0b111d;
+  border: 0;
+  border-bottom: 1px solid rgba(137, 151, 174, 0.12);
+  border-radius: 0;
+  display: block;
+  margin: 0;
+  overflow: visible;
+  padding: 18px 28px 10px;
+}
+
+.dashboard-shell .overview-copy {
+  padding: 0;
+}
+
+.dashboard-shell .pipeline-visual {
+  display: none;
+}
+
+.dashboard-shell .stage-chip {
+  background: #111a2a;
+  border-color: rgba(137, 151, 174, 0.12);
+  color: #c4cfdd;
+}
+
+.dashboard-shell .stage-chip span {
+  color: #c4cfdd;
+}
+
+.dashboard-shell .stage-chip strong {
+  color: #718199;
+}
+
+.dashboard-shell .stage-chip-active {
+  background: rgba(95, 230, 166, 0.13);
+  border-color: var(--accent);
+}
+
+.dashboard-shell .toolbar {
+  margin: 0;
+  padding: 18px 28px 0;
+}
+
+.dashboard-shell .workspace {
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  padding: 18px 28px 34px;
+}
+
+.dashboard-shell .segmented-control {
+  background: #101827;
+  border-color: rgba(137, 151, 174, 0.14);
+}
+
+.dashboard-shell .segmented-control button {
+  color: #718199;
+}
+
+.dashboard-shell .segmented-control .active {
+  background: rgba(95, 230, 166, 0.13);
+  color: #64eba7;
+}
+
+.dashboard-shell .lane {
+  background: #101827;
+  border-color: rgba(137, 151, 174, 0.12);
+}
+
+.dashboard-shell .lane-head {
+  border-bottom-color: var(--accent);
+}
+
+.dashboard-shell .lane-head span {
+  color: #c4cfdd;
+}
+
+.dashboard-shell .lane-head strong {
+  color: #718199;
+}
+
+.dashboard-shell .opportunity-card {
+  background: #0d1422;
+  border-color: rgba(137, 151, 174, 0.12);
+  color: #a2afbf;
+}
+
+.dashboard-shell .opportunity-card:hover,
+.dashboard-shell .opportunity-card.selected,
+.dashboard-shell .selected-row {
+  border-color: #64eba7;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.dashboard-shell .opportunity-card strong,
+.dashboard-shell td strong {
+  color: #ecf3fb;
+}
+
+.dashboard-shell .opportunity-card > span:not(.risk-dot),
+.dashboard-shell .opportunity-card small,
+.dashboard-shell td,
+.dashboard-shell td span {
+  color: #9aa8ba;
+}
+
+.dashboard-shell .progress-track {
+  background: #1a2435;
+}
+
+.dashboard-shell .table-wrap,
+.dashboard-shell .detail-panel {
+  background: #101827;
+  border-color: rgba(137, 151, 174, 0.12);
+}
+
+.dashboard-shell th,
+.dashboard-shell td {
+  border-bottom-color: rgba(137, 151, 174, 0.12);
+}
+
+.dashboard-shell th {
+  color: #718199;
+}
+
+.dashboard-shell tbody tr:hover {
+  background: rgba(95, 230, 166, 0.06);
+}
+
+.dashboard-shell .range-pair {
+  background: #0d1422;
+  border-color: rgba(137, 151, 174, 0.12);
+}
+
+.dashboard-shell .status-banner,
+.dashboard-shell .empty-state,
+.first-account-state {
+  background: rgba(137, 151, 174, 0.06);
+  border-color: rgba(137, 151, 174, 0.12);
+  color: #9aa8ba;
+}
+
+.first-account-state {
+  border: 1px solid rgba(137, 151, 174, 0.12);
+  border-radius: 8px;
+  display: grid;
+  min-height: 420px;
+  padding: 24px;
+  place-content: center;
+  text-align: center;
+}
+
+.first-account-state h2 {
+  color: #f8fbff;
+  font-size: clamp(1.6rem, 3vw, 2.5rem);
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: 1.1;
+  margin: 8px 0;
+}
+
+.first-account-state p {
+  color: #9aa8ba;
+  line-height: 1.55;
+  margin: 0 auto;
+  max-width: 560px;
+}
+
+.dashboard-shell input[type="date"] {
+  color-scheme: dark;
+}
+
 @media (max-width: 1180px) {
   .overview-band {
     grid-template-columns: 1fr;
@@ -1023,6 +1213,10 @@ tbody tr:hover {
   }
 
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-shell .workspace {
     grid-template-columns: 1fr;
   }
 
@@ -1049,6 +1243,11 @@ tbody tr:hover {
 @media (max-width: 760px) {
   .app-shell {
     padding: 14px;
+  }
+
+  .account-shell,
+  .dashboard-shell {
+    padding: 0;
   }
 
   .topbar {
@@ -1085,8 +1284,12 @@ tbody tr:hover {
   }
 
   .account-topbar,
+  .dashboard-shell .topbar,
   .account-tabs,
-  .account-layout {
+  .account-layout,
+  .dashboard-shell .overview-band,
+  .dashboard-shell .toolbar,
+  .dashboard-shell .workspace {
     padding-left: 14px;
     padding-right: 14px;
   }

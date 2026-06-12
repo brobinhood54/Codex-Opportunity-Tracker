@@ -15,6 +15,13 @@
       "when": 1781288166182,
       "tag": "0001_fluffy_mongoose",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1781290000000,
+      "tag": "0002_clear_demo_accounts",
+      "breakpoints": true
     }
   ]
 }

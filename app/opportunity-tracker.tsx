@@ -120,12 +120,12 @@ type AccountData = {
 };
 
 const STAGES: { id: Stage; progress: number; accent: string }[] = [
-  { id: "Discovery", progress: 15, accent: "#263241" },
-  { id: "Qualified", progress: 35, accent: "#177e81" },
-  { id: "Solution", progress: 55, accent: "#d66655" },
-  { id: "Proposal", progress: 70, accent: "#c99b36" },
-  { id: "Negotiation", progress: 85, accent: "#4f6f9f" },
-  { id: "Commit", progress: 95, accent: "#41825b" },
+  { id: "Discovery", progress: 15, accent: "#58c7e2" },
+  { id: "Qualified", progress: 35, accent: "#64eba7" },
+  { id: "Solution", progress: 55, accent: "#9f8cff" },
+  { id: "Proposal", progress: 70, accent: "#f0b33e" },
+  { id: "Negotiation", progress: 85, accent: "#ef7b67" },
+  { id: "Commit", progress: 95, accent: "#73e3a7" },
 ];
 
 const ACCOUNT_TABS: { id: TabId; label: string }[] = [
@@ -404,6 +404,7 @@ export default function OpportunityTracker() {
     setSaving(true);
     setError("");
 
+    const isEditing = Boolean(selected);
     const payload = {
       ...draft,
       id: selected?.id,
@@ -427,7 +428,7 @@ export default function OpportunityTracker() {
 
       const saved = result.opportunity;
       setOpportunities((current) => {
-        if (selected) {
+        if (isEditing) {
           return current.map((item) => (item.id === saved.id ? saved : item));
         }
         return [saved, ...current];
@@ -435,6 +436,11 @@ export default function OpportunityTracker() {
       setSelectedId(saved.id);
       selectedIdRef.current = saved.id;
       setDraft(toDraft(saved));
+      if (!isEditing) {
+        setAccountName(saved.accountName);
+        setActiveTab("context");
+        void loadAccount(saved.accountName);
+      }
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -543,10 +549,10 @@ export default function OpportunityTracker() {
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell account-shell dashboard-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Pipeline command center</p>
+          <p className="eyebrow">Deal Engine</p>
           <h1>Open opportunities</h1>
         </div>
         <div className="topbar-actions">
@@ -661,6 +667,8 @@ export default function OpportunityTracker() {
         <section className="opportunity-area">
           {loading ? (
             <div className="empty-state">Loading opportunities...</div>
+          ) : opportunities.length === 0 ? (
+            <FirstAccountEmptyState />
           ) : mode === "board" ? (
             <Board
               opportunities={filteredOpportunities}
@@ -679,8 +687,16 @@ export default function OpportunityTracker() {
         <aside className="detail-panel" aria-label="Opportunity details">
           <div className="detail-head">
             <div>
-              <p className="eyebrow">{selected ? "Selected" : "New"}</p>
-              <h2>{selected ? selected.accountName : "Opportunity"}</h2>
+              <p className="eyebrow">
+                {selected ? "Selected" : opportunities.length ? "New" : "First account"}
+              </p>
+              <h2>
+                {selected
+                  ? selected.accountName
+                  : opportunities.length
+                    ? "Opportunity"
+                    : "Real account"}
+              </h2>
             </div>
             {selected ? (
               <button
@@ -832,7 +848,13 @@ export default function OpportunityTracker() {
             </label>
             <div className="form-actions">
               <button className="primary-button" disabled={saving} type="submit">
-                {saving ? "Saving" : selected ? "Save" : "Create"}
+                {saving
+                  ? "Saving"
+                  : selected
+                    ? "Save"
+                    : opportunities.length
+                      ? "Create"
+                      : "Create account"}
               </button>
               {selected ? (
                 <>
@@ -859,6 +881,19 @@ export default function OpportunityTracker() {
         </aside>
       </div>
     </main>
+  );
+}
+
+function FirstAccountEmptyState() {
+  return (
+    <section className="first-account-state">
+      <p className="eyebrow">No open opportunities</p>
+      <h2>Start with one real account.</h2>
+      <p>
+        Add the account and current opportunity details, then the workspace opens
+        so you can bring in Gmail, Slack, and call context.
+      </p>
+    </section>
   );
 }
 
