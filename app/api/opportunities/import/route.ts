@@ -246,11 +246,29 @@ async function findExistingOpportunity(values: {
     .where(
       and(
         eq(opportunities.accountName, values.accountName),
-        eq(opportunities.opportunityName, values.opportunityName)
+        eq(opportunities.opportunityName, values.opportunityName),
+        eq(opportunities.status, "open")
       )
     )
     .limit(1);
-  return fallback;
+  if (fallback) return fallback;
+
+  const manualPlaceholderCandidates = await db
+    .select()
+    .from(opportunities)
+    .where(
+      and(
+        eq(opportunities.accountName, values.accountName),
+        eq(opportunities.salesforceOpportunityId, ""),
+        eq(opportunities.sourceSystem, "manual"),
+        eq(opportunities.status, "open")
+      )
+    )
+    .limit(2);
+
+  return manualPlaceholderCandidates.length === 1
+    ? manualPlaceholderCandidates[0]
+    : undefined;
 }
 
 export async function POST(request: Request) {
