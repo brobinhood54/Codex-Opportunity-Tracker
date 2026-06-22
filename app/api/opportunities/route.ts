@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { opportunities } from "../../../db/schema";
+import { accountProfiles, opportunities } from "../../../db/schema";
 
 const STAGES = [
   "Qualification",
@@ -25,6 +25,7 @@ const STAGE_PROGRESS: Record<(typeof STAGES)[number], number> = {
 };
 
 type OpportunityInsert = typeof opportunities.$inferInsert;
+type OpportunityRow = typeof opportunities.$inferSelect;
 
 function toRouteErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
@@ -106,6 +107,39 @@ function normalizeDate(value: unknown) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
 }
 
+async function upsertAccountProfileFromOpportunity(opportunity: OpportunityRow) {
+  const accountName = cleanText(opportunity.accountName, "", 120);
+  if (!accountName) return;
+
+  const db = getDb();
+  const [profile] = await db
+    .select()
+    .from(accountProfiles)
+    .where(eq(accountProfiles.accountName, accountName))
+    .limit(1);
+
+  const profileValues = {
+    accountName,
+    industry: opportunity.industry || profile?.industry || "Unknown",
+    health: opportunity.riskLevel === "High" ? "At Risk" : "Active",
+    score: opportunity.progress,
+    salesforceAccountId:
+      opportunity.salesforceAccountId || profile?.salesforceAccountId || "",
+    accountWebsite: opportunity.accountWebsite || profile?.accountWebsite || "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (profile) {
+    await db
+      .update(accountProfiles)
+      .set(profileValues)
+      .where(eq(accountProfiles.id, profile.id));
+    return;
+  }
+
+  await db.insert(accountProfiles).values(profileValues);
+}
+
 export async function GET() {
   try {
     const db = getDb();
@@ -173,6 +207,8 @@ export async function POST(request: Request) {
         updatedAt: new Date().toISOString(),
       })
       .returning();
+
+    await upsertAccountProfileFromOpportunity(opportunity);
 
     return Response.json({ opportunity }, { status: 201 });
   } catch (error) {
@@ -264,6 +300,8 @@ export async function PATCH(request: Request) {
     if (!opportunity) {
       return Response.json({ error: "Opportunity not found." }, { status: 404 });
     }
+
+    await upsertAccountProfileFromOpportunity(opportunity);
 
     return Response.json({ opportunity });
   } catch (error) {

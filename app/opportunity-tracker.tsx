@@ -21,6 +21,7 @@ type Stage =
   | "Closed";
 
 type RiskLevel = "Low" | "Medium" | "High";
+type DashboardView = "opportunities" | "accounts";
 type TabId =
   | "overview"
   | "context"
@@ -77,6 +78,19 @@ type AccountProfile = {
   notes: string;
   salesforceAccountId?: string;
   accountWebsite?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AccountSummary = AccountProfile & {
+  latestStage: string;
+  lastActivityDate: string;
+  nextStep: string;
+  openOpportunityCount: number;
+  sourceCount: number;
+  totalPipeline: number;
+  transcriptCount: number;
+  weightedPipeline: number;
 };
 
 type ContextSource = {
@@ -218,11 +232,13 @@ function toDraft(opportunity: Opportunity): Draft {
 
 function dateLabel(date: string) {
   if (!date) return "No date";
+  const value = date.includes("T") ? new Date(date) : new Date(`${date}T12:00:00`);
+  if (Number.isNaN(value.getTime())) return "No date";
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(`${date}T12:00:00`));
+  }).format(value);
 }
 
 function isSoon(date: string) {
@@ -253,13 +269,17 @@ function uniqueValues(values: string[]) {
 
 export default function OpportunityTracker() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [dashboardView, setDashboardView] =
+    useState<DashboardView>("opportunities");
   const [mode, setMode] = useState<"board" | "table">("board");
   const [query, setQuery] = useState("");
   const [stageFilter, setStageFilter] = useState<"All" | Stage>("All");
   const [riskFilter, setRiskFilter] = useState<"All" | RiskLevel>("All");
   const [loading, setLoading] = useState(true);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [accountName, setAccountName] = useState<string | null>(null);
@@ -313,6 +333,28 @@ export default function OpportunityTracker() {
     }
   }, []);
 
+  const loadAccounts = useCallback(async () => {
+    try {
+      const response = await fetch("/api/accounts", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        accounts?: AccountSummary[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Unable to load accounts.");
+      }
+
+      setAccounts(payload.accounts ?? []);
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error ? loadError.message : "Unable to load accounts."
+      );
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, []);
+
   const loadAccount = useCallback(async (nextAccountName: string) => {
     setAccountLoading(true);
     setAccountError("");
@@ -342,15 +384,18 @@ export default function OpportunityTracker() {
   }, []);
 
   useEffect(() => {
-    // The tracker needs to load durable opportunity records when the app opens.
+    // The tracker needs durable account and opportunity records when the app opens.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadOpportunities();
-  }, [loadOpportunities]);
+    void loadAccounts();
+  }, [loadAccounts, loadOpportunities]);
 
-  function refreshOpportunities() {
+  function refreshDashboard() {
     setLoading(true);
+    setAccountsLoading(true);
     setError("");
     void loadOpportunities();
+    void loadAccounts();
   }
 
   const filteredOpportunities = useMemo(() => {
@@ -374,6 +419,16 @@ export default function OpportunityTracker() {
       });
   }, [opportunities, query, riskFilter, stageFilter]);
 
+  const filteredAccounts = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return accounts.filter((account) => {
+      if (!normalizedQuery) return true;
+      return `${account.accountName} ${account.industry} ${account.latestStage} ${account.nextStep}`
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [accounts, query]);
+
   const metrics = useMemo(() => {
     const value = opportunities.reduce((sum, item) => sum + item.amount, 0);
     const weighted = opportunities.reduce(
@@ -396,14 +451,88 @@ export default function OpportunityTracker() {
     return { value, weighted, averageProgress, dueSoon, highRisk };
   }, [opportunities]);
 
+  const accountMetrics = useMemo(() => {
+    const activeAccounts = accounts.filter(
+      (account) => account.openOpportunityCount > 0
+    ).length;
+    const contextReady = accounts.filter(
+      (account) => account.sourceCount + account.transcriptCount > 0
+    ).length;
+    const atRisk = accounts.filter((account) =>
+      account.health.toLowerCase().includes("risk")
+    ).length;
+    const totalPipeline = accounts.reduce(
+      (sum, account) => sum + account.totalPipeline,
+      0
+    );
+    const weightedPipeline = accounts.reduce(
+      (sum, account) => sum + account.weightedPipeline,
+      0
+    );
+    const openOpportunities = accounts.reduce(
+      (sum, account) => sum + account.openOpportunityCount,
+      0
+    );
+
+    return {
+      activeAccounts,
+      atRisk,
+      contextReady,
+      openOpportunities,
+      totalPipeline,
+      weightedPipeline,
+    };
+  }, [accounts]);
+
+  const accountStrip = useMemo(
+    () => [
+      {
+        accent: "#64eba7",
+        label: "With open opps",
+        value: accountMetrics.activeAccounts,
+      },
+      {
+        accent: "#58c7e2",
+        label: "No open opp",
+        value: Math.max(0, accounts.length - accountMetrics.activeAccounts),
+      },
+      {
+        accent: "#9f8cff",
+        label: "With context",
+        value: accountMetrics.contextReady,
+      },
+      {
+        accent: "#ef7b67",
+        label: "At risk",
+        value: accountMetrics.atRisk,
+      },
+    ],
+    [accountMetrics, accounts.length]
+  );
+
   function updateDraft<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
   function startNew() {
+    setDashboardView("opportunities");
     setSelectedId(null);
     selectedIdRef.current = null;
     setDraft(EMPTY_DRAFT);
+  }
+
+  function openAccount(nextAccountName: string) {
+    const primary =
+      opportunities.find((item) => item.accountName === nextAccountName) ?? null;
+
+    setSelectedId(primary?.id ?? null);
+    selectedIdRef.current = primary?.id ?? null;
+    setDraft(
+      primary ? toDraft(primary) : { ...EMPTY_DRAFT, accountName: nextAccountName }
+    );
+    setAccountName(nextAccountName);
+    setActiveTab("overview");
+    void loadAccount(nextAccountName);
   }
 
   function selectOpportunity(id: number) {
@@ -424,6 +553,7 @@ export default function OpportunityTracker() {
     setAccountError("");
     setActiveTab("overview");
     void loadOpportunities();
+    void loadAccounts();
   }
 
   async function importSalesforceCsv(event: ChangeEvent<HTMLInputElement>) {
@@ -469,6 +599,7 @@ export default function OpportunityTracker() {
           payload.updated ?? 0
         }.`
       );
+      void loadAccounts();
 
       if (importedOpportunity && rows.length === 1) {
         setAccountName(importedOpportunity.accountName);
@@ -523,6 +654,7 @@ export default function OpportunityTracker() {
       setSelectedId(saved.id);
       selectedIdRef.current = saved.id;
       setDraft(toDraft(saved));
+      void loadAccounts();
       if (!isEditing) {
         setAccountName(saved.accountName);
         setActiveTab("context");
@@ -564,6 +696,7 @@ export default function OpportunityTracker() {
         current.map((item) => (item.id === saved.id ? saved : item))
       );
       setDraft(toDraft(saved));
+      void loadAccounts();
     } catch (patchError) {
       setError(
         patchError instanceof Error
@@ -607,6 +740,7 @@ export default function OpportunityTracker() {
       setSelectedId(null);
       selectedIdRef.current = null;
       setDraft(EMPTY_DRAFT);
+      void loadAccounts();
     } catch (archiveError) {
       setError(
         archiveError instanceof Error
@@ -640,9 +774,29 @@ export default function OpportunityTracker() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Deal Engine</p>
-          <h1>Open opportunities</h1>
+          <h1>
+            {dashboardView === "opportunities"
+              ? "Open opportunities"
+              : "All accounts"}
+          </h1>
         </div>
         <div className="topbar-actions">
+          <div className="segmented-control dashboard-switch" aria-label="Dashboard view">
+            <button
+              className={dashboardView === "opportunities" ? "active" : ""}
+              onClick={() => setDashboardView("opportunities")}
+              type="button"
+            >
+              Open opps
+            </button>
+            <button
+              className={dashboardView === "accounts" ? "active" : ""}
+              onClick={() => setDashboardView("accounts")}
+              type="button"
+            >
+              Accounts
+            </button>
+          </div>
           <label className="secondary-button import-button">
             {importingCsv ? "Importing" : "Import CSV"}
             <input
@@ -652,7 +806,7 @@ export default function OpportunityTracker() {
               type="file"
             />
           </label>
-          <button className="secondary-button" onClick={refreshOpportunities}>
+          <button className="secondary-button" onClick={refreshDashboard}>
             Refresh
           </button>
           <button className="primary-button" onClick={startNew}>
@@ -664,36 +818,76 @@ export default function OpportunityTracker() {
       <section className="overview-band">
         <div className="overview-copy">
           <div className="metric-grid" aria-label="Pipeline summary">
-            <Metric label="Open" value={String(opportunities.length)} />
-            <Metric label="Pipeline" value={formatCompact(metrics.value)} />
-            <Metric label="Weighted" value={formatCompact(metrics.weighted)} />
-            <Metric label="Progress" value={`${metrics.averageProgress}%`} />
-            <Metric label="Next steps" value={String(metrics.dueSoon)} tone="watch" />
-            <Metric label="High risk" value={String(metrics.highRisk)} tone="risk" />
+            {dashboardView === "opportunities" ? (
+              <>
+                <Metric label="Open" value={String(opportunities.length)} />
+                <Metric label="Pipeline" value={formatCompact(metrics.value)} />
+                <Metric label="Weighted" value={formatCompact(metrics.weighted)} />
+                <Metric label="Progress" value={`${metrics.averageProgress}%`} />
+                <Metric label="Next steps" value={String(metrics.dueSoon)} tone="watch" />
+                <Metric label="High risk" value={String(metrics.highRisk)} tone="risk" />
+              </>
+            ) : (
+              <>
+                <Metric label="Accounts" value={String(accounts.length)} />
+                <Metric
+                  label="With opps"
+                  value={String(accountMetrics.activeAccounts)}
+                />
+                <Metric
+                  label="Open opps"
+                  value={String(accountMetrics.openOpportunities)}
+                />
+                <Metric
+                  label="Pipeline"
+                  value={formatCompact(accountMetrics.totalPipeline)}
+                />
+                <Metric
+                  label="Weighted"
+                  value={formatCompact(accountMetrics.weightedPipeline)}
+                />
+                <Metric
+                  label="Context"
+                  value={String(accountMetrics.contextReady)}
+                  tone="watch"
+                />
+              </>
+            )}
           </div>
           <div className="stage-strip" aria-label="Stage distribution">
-            {STAGES.map((stage) => {
-              const count = opportunities.filter(
-                (item) => item.stage === stage.id
-              ).length;
-              return (
-                <button
-                  className={
-                    stageFilter === stage.id
-                      ? "stage-chip stage-chip-active"
-                      : "stage-chip"
-                  }
-                  key={stage.id}
-                  onClick={() =>
-                    setStageFilter(stageFilter === stage.id ? "All" : stage.id)
-                  }
-                  style={{ "--accent": stage.accent } as CSSProperties}
-                >
-                  <span>{stage.label}</span>
-                  <strong>{count}</strong>
-                </button>
-              );
-            })}
+            {dashboardView === "opportunities"
+              ? STAGES.map((stage) => {
+                  const count = opportunities.filter(
+                    (item) => item.stage === stage.id
+                  ).length;
+                  return (
+                    <button
+                      className={
+                        stageFilter === stage.id
+                          ? "stage-chip stage-chip-active"
+                          : "stage-chip"
+                      }
+                      key={stage.id}
+                      onClick={() =>
+                        setStageFilter(stageFilter === stage.id ? "All" : stage.id)
+                      }
+                      style={{ "--accent": stage.accent } as CSSProperties}
+                    >
+                      <span>{stage.label}</span>
+                      <strong>{count}</strong>
+                    </button>
+                  );
+                })
+              : accountStrip.map((item) => (
+                  <div
+                    className="stage-chip account-chip"
+                    key={item.label}
+                    style={{ "--accent": item.accent } as CSSProperties}
+                  >
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
           </div>
         </div>
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -704,57 +898,69 @@ export default function OpportunityTracker() {
         />
       </section>
 
-      <section className="toolbar" aria-label="Opportunity filters">
+      <section className="toolbar" aria-label="Dashboard filters">
         <label className="search-field">
           <span>Search</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Account, deal, owner, next step"
+            placeholder={
+              dashboardView === "opportunities"
+                ? "Account, deal, owner, next step"
+                : "Account, industry, stage, next step"
+            }
           />
         </label>
-        <label className="select-field">
-          <span>Stage</span>
-          <select
-            value={stageFilter}
-            onChange={(event) => setStageFilter(event.target.value as "All" | Stage)}
-          >
-            <option value="All">All stages</option>
-            {STAGES.map((stage) => (
-              <option key={stage.id} value={stage.id}>
-                {stage.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="select-field">
-          <span>Risk</span>
-          <select
-            value={riskFilter}
-            onChange={(event) =>
-              setRiskFilter(event.target.value as "All" | RiskLevel)
-            }
-          >
-            <option value="All">All risk</option>
-            <option value="Low">Low</option>
-            <option value="Medium">Medium</option>
-            <option value="High">High</option>
-          </select>
-        </label>
-        <div className="segmented-control" aria-label="View mode">
-          <button
-            className={mode === "board" ? "active" : ""}
-            onClick={() => setMode("board")}
-          >
-            Board
-          </button>
-          <button
-            className={mode === "table" ? "active" : ""}
-            onClick={() => setMode("table")}
-          >
-            Table
-          </button>
-        </div>
+        {dashboardView === "opportunities" ? (
+          <>
+            <label className="select-field">
+              <span>Stage</span>
+              <select
+                value={stageFilter}
+                onChange={(event) =>
+                  setStageFilter(event.target.value as "All" | Stage)
+                }
+              >
+                <option value="All">All stages</option>
+                {STAGES.map((stage) => (
+                  <option key={stage.id} value={stage.id}>
+                    {stage.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="select-field">
+              <span>Risk</span>
+              <select
+                value={riskFilter}
+                onChange={(event) =>
+                  setRiskFilter(event.target.value as "All" | RiskLevel)
+                }
+              >
+                <option value="All">All risk</option>
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+              </select>
+            </label>
+            <div className="segmented-control" aria-label="View mode">
+              <button
+                className={mode === "board" ? "active" : ""}
+                onClick={() => setMode("board")}
+              >
+                Board
+              </button>
+              <button
+                className={mode === "table" ? "active" : ""}
+                onClick={() => setMode("table")}
+              >
+                Table
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="account-toolbar-spacer" aria-hidden="true" />
+        )}
       </section>
 
       {error ? <div className="status-banner">{error}</div> : null}
@@ -762,7 +968,23 @@ export default function OpportunityTracker() {
         <div className="status-banner success-banner">{importMessage}</div>
       ) : null}
 
-      <div className="workspace">
+      {dashboardView === "accounts" ? (
+        <div className="workspace accounts-workspace">
+          <section className="opportunity-area accounts-area">
+            {accountsLoading ? (
+              <div className="empty-state">Loading accounts...</div>
+            ) : accounts.length === 0 ? (
+              <FirstAccountEmptyState />
+            ) : (
+              <AccountDirectory
+                accounts={filteredAccounts}
+                onSelect={openAccount}
+              />
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="workspace">
         <section className="opportunity-area">
           {loading ? (
             <div className="empty-state">Loading opportunities...</div>
@@ -978,7 +1200,8 @@ export default function OpportunityTracker() {
             </div>
           </form>
         </aside>
-      </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -993,6 +1216,88 @@ function FirstAccountEmptyState() {
         so you can bring in Gmail, Slack, and call context.
       </p>
     </section>
+  );
+}
+
+function AccountDirectory({
+  accounts,
+  onSelect,
+}: {
+  accounts: AccountSummary[];
+  onSelect: (accountName: string) => void;
+}) {
+  if (!accounts.length) {
+    return <div className="empty-state">No accounts match.</div>;
+  }
+
+  return (
+    <div className="table-wrap account-directory">
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Health</th>
+            <th>Open opps</th>
+            <th>Pipeline</th>
+            <th>Stage</th>
+            <th>Next step</th>
+            <th>Context</th>
+            <th>Activity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {accounts.map((account) => {
+            const contextCount = account.sourceCount + account.transcriptCount;
+            const health =
+              account.health || (account.openOpportunityCount ? "Active" : "Prospect");
+            const healthClass = health.toLowerCase().includes("risk")
+              ? "risk-high"
+              : "risk-low";
+
+            return (
+              <tr
+                key={account.accountName}
+                onClick={() => onSelect(account.accountName)}
+              >
+                <td>
+                  <button className="account-name-button" type="button">
+                    <strong>{account.accountName}</strong>
+                    <span>{account.industry || "Unknown"}</span>
+                  </button>
+                </td>
+                <td>
+                  <span className={`risk-pill ${healthClass}`}>{health}</span>
+                </td>
+                <td>
+                  <strong>{account.openOpportunityCount}</strong>
+                  <span>
+                    {account.openOpportunityCount === 1 ? "deal" : "deals"}
+                  </span>
+                </td>
+                <td>
+                  <strong>{formatCompact(account.totalPipeline)}</strong>
+                  <span>{formatCompact(account.weightedPipeline)} weighted</span>
+                </td>
+                <td>{stageLabel(account.latestStage || "No open opp")}</td>
+                <td>
+                  <strong>
+                    {account.nextStep ||
+                      (account.openOpportunityCount ? "Open" : "No active deal")}
+                  </strong>
+                </td>
+                <td>
+                  <strong>{contextCount}</strong>
+                  <span>
+                    {account.transcriptCount} calls, {account.sourceCount} sources
+                  </span>
+                </td>
+                <td>{dateLabel(account.lastActivityDate || account.updatedAt)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1020,6 +1325,7 @@ function AccountView({
   primaryOpportunity: Opportunity | null;
 }) {
   const opportunities = accountData?.opportunities ?? [];
+  const activeOpportunity = primaryOpportunity ?? opportunities[0] ?? null;
   const totalValue = opportunities.reduce((sum, item) => sum + item.amount, 0);
   const weightedValue = opportunities.reduce(
     (sum, item) => sum + item.amount * (item.probability / 100),
@@ -1047,7 +1353,7 @@ function AccountView({
             <div className="account-badges">
               <span>{accountData?.profile.industry ?? "Unknown"}</span>
               <span>
-                {primaryOpportunity ? stageLabel(primaryOpportunity.stage) : "Prospect"}
+                {activeOpportunity ? stageLabel(activeOpportunity.stage) : "Prospect"}
               </span>
               <span>{accountData?.profile.health ?? "Loading"}</span>
             </div>
@@ -1096,7 +1402,7 @@ function AccountView({
               accountName={accountName}
               activeTab={activeTab}
               onAccountUpdate={onAccountUpdate}
-              primaryOpportunity={primaryOpportunity}
+              primaryOpportunity={activeOpportunity}
               stakeholders={stakeholders}
             />
           </section>

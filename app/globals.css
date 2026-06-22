@@ -1114,6 +1114,10 @@ tbody tr:hover {
   border-color: rgba(137, 151, 174, 0.14);
 }
 
+.dashboard-shell .dashboard-switch {
+  min-width: 220px;
+}
+
 .dashboard-shell .segmented-control button {
   color: #718199;
 }
@@ -1173,6 +1177,53 @@ tbody tr:hover {
 .dashboard-shell .detail-panel {
   background: #101827;
   border-color: rgba(137, 151, 174, 0.12);
+}
+
+.dashboard-shell .accounts-workspace {
+  grid-template-columns: 1fr;
+}
+
+.dashboard-shell .accounts-area {
+  min-width: 0;
+}
+
+.account-toolbar-spacer {
+  grid-column: span 3;
+}
+
+.account-chip {
+  cursor: default;
+}
+
+.account-directory table {
+  min-width: 1080px;
+}
+
+.account-directory td {
+  height: 74px;
+}
+
+.account-name-button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: grid;
+  gap: 3px;
+  padding: 0;
+  text-align: left;
+}
+
+.account-name-button strong {
+  color: #ecf3fb;
+  font-size: 0.95rem;
+}
+
+.account-name-button span {
+  color: #718199;
+}
+
+.account-directory .risk-pill {
+  width: fit-content;
 }
 
 .dashboard-shell th,
@@ -1291,6 +1342,15 @@ tbody tr:hover {
   .topbar-actions,
   .topbar-actions button {
     width: 100%;
+  }
+
+  .dashboard-shell .dashboard-switch,
+  .account-toolbar-spacer {
+    width: 100%;
+  }
+
+  .account-toolbar-spacer {
+    display: none;
   }
 
   .metric-grid,

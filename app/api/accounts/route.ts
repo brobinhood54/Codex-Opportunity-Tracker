@@ -9,6 +9,19 @@ import {
 } from "../../../db/schema";
 
 type ContextSourceInsert = typeof contextSources.$inferInsert;
+type AccountProfileRow = typeof accountProfiles.$inferSelect;
+type OpportunityRow = typeof opportunities.$inferSelect;
+
+type AccountSummary = AccountProfileRow & {
+  latestStage: string;
+  lastActivityDate: string;
+  nextStep: string;
+  openOpportunityCount: number;
+  sourceCount: number;
+  totalPipeline: number;
+  transcriptCount: number;
+  weightedPipeline: number;
+};
 
 const SOURCE_TYPES = ["manual", "gmail", "slack", "transcript", "file"] as const;
 const MONTHS: Record<string, string> = {
@@ -104,6 +117,59 @@ function tryJsonArray(value: string) {
   } catch {
     return [];
   }
+}
+
+function maxDateString(...values: string[]) {
+  return values
+    .filter(Boolean)
+    .sort((a, b) => b.localeCompare(a))[0] ?? "";
+}
+
+function profileFromAccountName(accountName: string): AccountProfileRow {
+  const timestamp = new Date().toISOString();
+  return {
+    id: 0,
+    accountName,
+    industry: "Unknown",
+    segment: "Prospect",
+    health: "Prospect",
+    score: 0,
+    notes: "",
+    salesforceAccountId: "",
+    accountWebsite: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function profileFromOpportunity(opportunity: OpportunityRow): AccountProfileRow {
+  return {
+    id: 0,
+    accountName: opportunity.accountName,
+    industry: opportunity.industry || "Unknown",
+    segment: "Prospect",
+    health: opportunity.riskLevel === "High" ? "At Risk" : "Active",
+    score: opportunity.progress,
+    notes: "",
+    salesforceAccountId: opportunity.salesforceAccountId,
+    accountWebsite: opportunity.accountWebsite,
+    createdAt: opportunity.createdAt,
+    updatedAt: opportunity.updatedAt,
+  };
+}
+
+function initAccountSummary(profile: AccountProfileRow): AccountSummary {
+  return {
+    ...profile,
+    latestStage: "",
+    lastActivityDate: "",
+    nextStep: "",
+    openOpportunityCount: 0,
+    sourceCount: 0,
+    totalPipeline: 0,
+    transcriptCount: 0,
+    weightedPipeline: 0,
+  };
 }
 
 function stripExtension(name: string) {
@@ -493,6 +559,108 @@ async function readAccount(accountName: string) {
   };
 }
 
+async function readAccountSummaries() {
+  const db = getDb();
+  const [profiles, openOpportunities, sources, transcripts] = await Promise.all([
+    db
+      .select()
+      .from(accountProfiles)
+      .orderBy(desc(accountProfiles.updatedAt), desc(accountProfiles.id)),
+    db
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.status, "open"))
+      .orderBy(desc(opportunities.updatedAt), desc(opportunities.id)),
+    db
+      .select()
+      .from(contextSources)
+      .where(eq(contextSources.status, "active"))
+      .orderBy(desc(contextSources.createdAt), desc(contextSources.id)),
+    db
+      .select()
+      .from(callTranscripts)
+      .orderBy(desc(callTranscripts.callDate), desc(callTranscripts.id)),
+  ]);
+
+  const byName = new Map<string, AccountSummary>();
+
+  for (const profile of profiles) {
+    byName.set(profile.accountName, initAccountSummary(profile));
+  }
+
+  for (const opportunity of openOpportunities) {
+    const summary =
+      byName.get(opportunity.accountName) ??
+      initAccountSummary(profileFromOpportunity(opportunity));
+
+    summary.openOpportunityCount += 1;
+    summary.totalPipeline += opportunity.amount;
+    summary.weightedPipeline += Math.round(
+      opportunity.amount * (opportunity.probability / 100)
+    );
+    summary.lastActivityDate = maxDateString(
+      summary.lastActivityDate,
+      opportunity.lastActivityDate,
+      opportunity.updatedAt
+    );
+
+    if (!summary.latestStage) {
+      summary.latestStage = opportunity.stage;
+    }
+    if (!summary.nextStep && opportunity.nextStep) {
+      summary.nextStep = opportunity.nextStep;
+    }
+    if (!summary.accountWebsite && opportunity.accountWebsite) {
+      summary.accountWebsite = opportunity.accountWebsite;
+    }
+    if ((!summary.industry || summary.industry === "Unknown") && opportunity.industry) {
+      summary.industry = opportunity.industry;
+    }
+    if (!summary.salesforceAccountId && opportunity.salesforceAccountId) {
+      summary.salesforceAccountId = opportunity.salesforceAccountId;
+    }
+
+    byName.set(opportunity.accountName, summary);
+  }
+
+  for (const source of sources) {
+    const summary =
+      byName.get(source.accountName) ??
+      initAccountSummary(profileFromAccountName(source.accountName));
+    summary.sourceCount += 1;
+    summary.lastActivityDate = maxDateString(
+      summary.lastActivityDate,
+      source.sourceDate,
+      source.createdAt
+    );
+    byName.set(source.accountName, summary);
+  }
+
+  for (const transcript of transcripts) {
+    const summary =
+      byName.get(transcript.accountName) ??
+      initAccountSummary(profileFromAccountName(transcript.accountName));
+    summary.transcriptCount += 1;
+    summary.lastActivityDate = maxDateString(
+      summary.lastActivityDate,
+      transcript.callDate,
+      transcript.createdAt
+    );
+    byName.set(transcript.accountName, summary);
+  }
+
+  return Array.from(byName.values()).sort((a, b) => {
+    const activeDelta =
+      Number(b.openOpportunityCount > 0) - Number(a.openOpportunityCount > 0);
+    if (activeDelta) return activeDelta;
+
+    const pipelineDelta = b.totalPipeline - a.totalPipeline;
+    if (pipelineDelta) return pipelineDelta;
+
+    return a.accountName.localeCompare(b.accountName);
+  });
+}
+
 export async function GET(request: Request) {
   try {
     const accountName = cleanAccountName(
@@ -500,10 +668,7 @@ export async function GET(request: Request) {
     );
 
     if (!accountName) {
-      return Response.json(
-        { error: "accountName is required." },
-        { status: 400 }
-      );
+      return Response.json({ accounts: await readAccountSummaries() });
     }
 
     return Response.json({ account: await readAccount(accountName) });
