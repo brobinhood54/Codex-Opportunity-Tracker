@@ -106,11 +106,31 @@ type ContextSource = {
 type TranscriptQuestion = {
   question: string;
   status: string;
+  owner?: string;
+  kind?: string;
+  askedBy?: string;
+  action?: string;
+  priority?: string;
 };
 
 type TranscriptSignal = {
   label: string;
   tone: string;
+  category?: string;
+  summary?: string;
+  evidence?: string;
+  confidence?: string;
+};
+
+type TranscriptPerson = {
+  name: string;
+  title?: string;
+  company?: string;
+  side?: "customer" | "oasis" | "unknown";
+  role?: string;
+  influence?: string;
+  mentionCount?: number;
+  questionCount?: number;
 };
 
 type CallTranscript = {
@@ -119,7 +139,7 @@ type CallTranscript = {
   callDate: string;
   transcript: string;
   summary: string;
-  attendees: string[];
+  attendees: (TranscriptPerson | string)[];
   questions: TranscriptQuestion[];
   signals: TranscriptSignal[];
   createdAt: string;
@@ -263,8 +283,99 @@ function stageLabel(stage: Stage | string) {
   return STAGES.find((item) => item.id === stage)?.label ?? stage;
 }
 
-function uniqueValues(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+function normalizePerson(person: TranscriptPerson | string): TranscriptPerson {
+  if (typeof person === "string") {
+    return {
+      name: person,
+      side: "unknown",
+      role: "Unclassified",
+      influence: "Low",
+      mentionCount: 0,
+      questionCount: 0,
+    };
+  }
+
+  return {
+    ...person,
+    name: person.name || "Unknown person",
+    side: person.side ?? "unknown",
+    role: person.role || "Unclassified",
+    influence: person.influence || "Low",
+    mentionCount: person.mentionCount ?? 0,
+    questionCount: person.questionCount ?? 0,
+  };
+}
+
+function personMatches(a: string, b: string) {
+  const left = a.toLowerCase();
+  const right = b.toLowerCase();
+  return left === right || left.startsWith(`${right} `) || right.startsWith(`${left} `);
+}
+
+function collectStakeholders(transcripts: CallTranscript[]) {
+  const people: TranscriptPerson[] = [];
+
+  for (const transcript of transcripts) {
+    for (const attendee of transcript.attendees.map(normalizePerson)) {
+      const existing = people.find((person) =>
+        personMatches(person.name, attendee.name)
+      );
+
+      if (!existing) {
+        people.push({ ...attendee });
+        continue;
+      }
+
+      if (attendee.name.length > existing.name.length) existing.name = attendee.name;
+      existing.title ||= attendee.title;
+      existing.company ||= attendee.company;
+      existing.role =
+        existing.role === "Unclassified" ? attendee.role : existing.role;
+      if (existing.side === "unknown" && attendee.side !== "unknown") {
+        existing.side = attendee.side;
+      }
+      existing.influence =
+        existing.influence === "High" || attendee.influence === "High"
+          ? "High"
+          : existing.influence === "Medium" || attendee.influence === "Medium"
+            ? "Medium"
+            : "Low";
+      existing.mentionCount =
+        (existing.mentionCount ?? 0) + (attendee.mentionCount ?? 0);
+      existing.questionCount =
+        (existing.questionCount ?? 0) + (attendee.questionCount ?? 0);
+    }
+  }
+
+  return people
+    .filter((person) => person.side !== "oasis")
+    .sort((a, b) => {
+      const influenceScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 };
+      const influenceDelta =
+        (influenceScore[b.influence ?? "Low"] ?? 1) -
+        (influenceScore[a.influence ?? "Low"] ?? 1);
+      if (influenceDelta) return influenceDelta;
+      return (
+        (b.mentionCount ?? 0) +
+        (b.questionCount ?? 0) -
+        ((a.mentionCount ?? 0) + (a.questionCount ?? 0))
+      );
+    });
+}
+
+function parseSourceLines(text: string) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [titlePart, urlPart] = line.split(/\s+\|\s+/, 2);
+      const isUrlOnly = /^https?:\/\//i.test(titlePart);
+      return {
+        title: titlePart,
+        url: urlPart || (isUrlOnly ? titlePart : ""),
+      };
+    });
 }
 
 export default function OpportunityTracker() {
@@ -1331,14 +1442,51 @@ function AccountView({
     (sum, item) => sum + item.amount * (item.probability / 100),
     0
   );
+  const [reprocessError, setReprocessError] = useState("");
+  const [reprocessMessage, setReprocessMessage] = useState("");
+  const [reprocessing, setReprocessing] = useState(false);
   const openQuestions =
     accountData?.transcripts.reduce(
       (sum, transcript) => sum + transcript.questions.length,
       0
     ) ?? 0;
-  const stakeholders = uniqueValues(
-    accountData?.transcripts.flatMap((transcript) => transcript.attendees) ?? []
-  );
+  const stakeholders = collectStakeholders(accountData?.transcripts ?? []);
+
+  async function reprocessCalls() {
+    if (!accountData?.transcripts.length) return;
+
+    setReprocessError("");
+    setReprocessMessage("");
+    setReprocessing(true);
+
+    try {
+      const response = await fetch("/api/accounts", {
+        body: JSON.stringify({ action: "reprocess", accountName }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+        reprocessed?: number;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? "Unable to reprocess calls.");
+      }
+
+      onAccountUpdate(payload.account);
+      setReprocessMessage(
+        `Reprocessed ${payload.reprocessed ?? accountData.transcripts.length} saved call(s).`
+      );
+    } catch (error) {
+      setReprocessError(
+        error instanceof Error ? error.message : "Unable to reprocess calls."
+      );
+    } finally {
+      setReprocessing(false);
+    }
+  }
 
   return (
     <main className="app-shell account-shell">
@@ -1360,10 +1508,22 @@ function AccountView({
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="secondary-button" onClick={onReload}>
+          <button className="secondary-button" onClick={onReload} type="button">
             Refresh
           </button>
-          <button className="primary-button" onClick={() => onTabChange("context")}>
+          <button
+            className="secondary-button"
+            disabled={!accountData?.transcripts.length || reprocessing}
+            onClick={() => void reprocessCalls()}
+            type="button"
+          >
+            {reprocessing ? "Reprocessing" : "Reprocess calls"}
+          </button>
+          <button
+            className="primary-button"
+            onClick={() => onTabChange("context")}
+            type="button"
+          >
             Add context
           </button>
         </div>
@@ -1382,6 +1542,10 @@ function AccountView({
       </nav>
 
       {accountError ? <div className="status-banner">{accountError}</div> : null}
+      {reprocessError ? <div className="status-banner">{reprocessError}</div> : null}
+      {reprocessMessage ? (
+        <div className="status-banner success-banner">{reprocessMessage}</div>
+      ) : null}
 
       {accountLoading && !accountData ? (
         <div className="empty-state">Loading account...</div>
@@ -1425,7 +1589,7 @@ function AccountTabPanel({
   activeTab: TabId;
   onAccountUpdate: (account: AccountData) => void;
   primaryOpportunity: Opportunity | null;
-  stakeholders: string[];
+  stakeholders: TranscriptPerson[];
 }) {
   if (!accountData) {
     return <div className="empty-state">No account data loaded.</div>;
@@ -1481,9 +1645,10 @@ function AccountTabPanel({
 
   if (activeTab === "success") {
     return (
-      <PlaceholderTab
-        title="Success criteria"
-        value="No success criteria document loaded yet."
+      <SuccessCriteriaTab
+        accountData={accountData}
+        accountName={accountName}
+        onAccountUpdate={onAccountUpdate}
       />
     );
   }
@@ -1504,7 +1669,7 @@ function OverviewTab({
 }: {
   accountData: AccountData;
   primaryOpportunity: Opportunity | null;
-  stakeholders: string[];
+  stakeholders: TranscriptPerson[];
 }) {
   const recentSources = accountData.sources.slice(0, 4);
 
@@ -1557,8 +1722,15 @@ function DealContextTab({
   const [transcriptText, setTranscriptText] = useState("");
   const [fileName, setFileName] = useState("");
   const [saving, setSaving] = useState(false);
-  const [connectorSaving, setConnectorSaving] = useState("");
-  const [error, setError] = useState("");
+  const [contextType, setContextType] = useState<"gmail" | "slack" | "manual">(
+    "gmail"
+  );
+  const [contextTitle, setContextTitle] = useState("");
+  const [contextDate, setContextDate] = useState("");
+  const [contextSummary, setContextSummary] = useState("");
+  const [contextSaving, setContextSaving] = useState(false);
+  const [contextError, setContextError] = useState("");
+  const [transcriptError, setTranscriptError] = useState("");
 
   async function readFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -1571,7 +1743,7 @@ function DealContextTab({
   async function saveTranscript(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
-    setError("");
+    setTranscriptError("");
 
     try {
       const response = await fetch("/api/accounts", {
@@ -1601,7 +1773,7 @@ function DealContextTab({
       setTranscriptText("");
       setFileName("");
     } catch (saveError) {
-      setError(
+      setTranscriptError(
         saveError instanceof Error
           ? saveError.message
           : "Unable to save transcript."
@@ -1611,21 +1783,28 @@ function DealContextTab({
     }
   }
 
-  async function queueConnectorSource(sourceType: "gmail" | "slack") {
-    setConnectorSaving(sourceType);
-    setError("");
+  function selectContextType(sourceType: "gmail" | "slack") {
+    const label = sourceType === "gmail" ? "Gmail" : "Slack";
+    setContextType(sourceType);
+    setContextTitle((current) => current || `${label} deal context`);
+  }
+
+  async function saveContextSource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setContextSaving(true);
+    setContextError("");
 
     try {
-      const label = sourceType === "gmail" ? "Gmail" : "Slack";
       const response = await fetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "source",
           accountName,
-          sourceType,
-          title: `${label} sync requested`,
-          summary: `${label} context lane is ready for connector-backed account history.`,
+          sourceType: contextType,
+          title: contextTitle,
+          sourceDate: contextDate,
+          summary: contextSummary,
         }),
       });
       const payload = (await response.json()) as {
@@ -1634,18 +1813,21 @@ function DealContextTab({
       };
 
       if (!response.ok || !payload.account) {
-        throw new Error(payload.error ?? `Unable to queue ${label} sync.`);
+        throw new Error(payload.error ?? "Unable to save context.");
       }
 
       onAccountUpdate(payload.account);
+      setContextTitle("");
+      setContextDate("");
+      setContextSummary("");
     } catch (saveError) {
-      setError(
+      setContextError(
         saveError instanceof Error
           ? saveError.message
-          : "Unable to queue connector sync."
+          : "Unable to save context."
       );
     } finally {
-      setConnectorSaving("");
+      setContextSaving(false);
     }
   }
 
@@ -1658,18 +1840,18 @@ function DealContextTab({
         </div>
         <div className="connector-grid">
           <ConnectorCard
-            actionLabel={connectorSaving === "gmail" ? "Queued" : "Queue sync"}
-            disabled={Boolean(connectorSaving)}
+            actionLabel={contextType === "gmail" ? "Selected" : "Use"}
+            disabled={contextSaving}
             label="Gmail"
-            onAction={() => void queueConnectorSource("gmail")}
-            status="Connector lane"
+            onAction={() => selectContextType("gmail")}
+            status="Email context"
           />
           <ConnectorCard
-            actionLabel={connectorSaving === "slack" ? "Queued" : "Queue sync"}
-            disabled={Boolean(connectorSaving)}
+            actionLabel={contextType === "slack" ? "Selected" : "Use"}
+            disabled={contextSaving}
             label="Slack"
-            onAction={() => void queueConnectorSource("slack")}
-            status="Connector lane"
+            onAction={() => selectContextType("slack")}
+            status="Channel context"
           />
           <ConnectorCard
             actionLabel="Ready"
@@ -1679,6 +1861,61 @@ function DealContextTab({
           />
         </div>
       </section>
+
+      <form className="section-block context-form" onSubmit={saveContextSource}>
+        <div className="section-head">
+          <h2>Import app context</h2>
+          <span>{contextType}</span>
+        </div>
+        <div className="form-grid">
+          <label>
+            <span>Source</span>
+            <select
+              value={contextType}
+              onChange={(event) =>
+                setContextType(event.target.value as "gmail" | "slack" | "manual")
+              }
+            >
+              <option value="gmail">Gmail</option>
+              <option value="slack">Slack</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+          <label>
+            <span>Date</span>
+            <input
+              type="date"
+              value={contextDate}
+              onChange={(event) => setContextDate(event.target.value)}
+            />
+          </label>
+        </div>
+        <label>
+          <span>Title</span>
+          <input
+            required
+            value={contextTitle}
+            onChange={(event) => setContextTitle(event.target.value)}
+            placeholder="Champion email thread, security Slack thread"
+          />
+        </label>
+        <label>
+          <span>Summary</span>
+          <textarea
+            className="context-textarea"
+            required
+            value={contextSummary}
+            onChange={(event) => setContextSummary(event.target.value)}
+            placeholder="Paste the Codex-generated Gmail or Slack summary here..."
+          />
+        </label>
+        {contextError ? <div className="status-banner">{contextError}</div> : null}
+        <div className="form-actions">
+          <button className="primary-button" disabled={contextSaving} type="submit">
+            {contextSaving ? "Saving" : "Save context"}
+          </button>
+        </div>
+      </form>
 
       <form className="section-block transcript-form" onSubmit={saveTranscript}>
         <div className="section-head">
@@ -1722,13 +1959,23 @@ function DealContextTab({
             placeholder="Paste transcript text here..."
           />
         </label>
-        {error ? <div className="status-banner">{error}</div> : null}
+        {transcriptError ? (
+          <div className="status-banner">{transcriptError}</div>
+        ) : null}
         <div className="form-actions">
           <button className="primary-button" disabled={saving} type="submit">
             {saving ? "Importing" : "Import transcript"}
           </button>
         </div>
       </form>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Saved context</h2>
+          <span>{accountData.sources.length}</span>
+        </div>
+        <SourceList sources={accountData.sources} />
+      </section>
 
       <section className="section-block">
         <div className="section-head">
@@ -1746,8 +1993,12 @@ function StakeholdersTab({
   stakeholders,
 }: {
   accountData: AccountData;
-  stakeholders: string[];
+  stakeholders: TranscriptPerson[];
 }) {
+  const oasisTeam = accountData.transcripts
+    .flatMap((transcript) => transcript.attendees.map(normalizePerson))
+    .filter((person) => person.side === "oasis");
+
   return (
     <div className="tab-stack">
       <section className="section-block">
@@ -1758,17 +2009,28 @@ function StakeholdersTab({
         {stakeholders.length ? (
           <div className="person-grid">
             {stakeholders.map((person) => (
-              <article className="person-card" key={person}>
-                <strong>{person}</strong>
-                <span>Unclassified</span>
+              <article className="person-card" key={person.name}>
+                <div className="person-card-head">
+                  <strong>{person.name}</strong>
+                  <span className={`risk-pill ${
+                    person.influence === "High"
+                      ? "risk-high"
+                      : person.influence === "Medium"
+                        ? "risk-medium"
+                        : "risk-low"
+                  }`}>
+                    {person.influence}
+                  </span>
+                </div>
+                <span>{person.role || "Unclassified"}</span>
+                {person.title || person.company ? (
+                  <p>
+                    {[person.title, person.company].filter(Boolean).join(" · ")}
+                  </p>
+                ) : null}
                 <p>
-                  Seen across{" "}
-                  {
-                    accountData.transcripts.filter((transcript) =>
-                      transcript.attendees.includes(person)
-                    ).length
-                  }{" "}
-                  call(s)
+                  {person.mentionCount ?? 0} turn(s), {person.questionCount ?? 0}{" "}
+                  deal question(s)
                 </p>
               </article>
             ))}
@@ -1777,6 +2039,19 @@ function StakeholdersTab({
           <div className="empty-state">No stakeholders extracted yet.</div>
         )}
       </section>
+      {oasisTeam.length ? (
+        <section className="section-block">
+          <div className="section-head">
+            <h2>Oasis team on calls</h2>
+            <span>{oasisTeam.length}</span>
+          </div>
+          <div className="tag-row">
+            {oasisTeam.map((person) => (
+              <span key={person.name}>{person.name}</span>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1788,32 +2063,59 @@ function QuestionsTab({ accountData }: { accountData: AccountData }) {
       title: transcript.title,
       callDate: transcript.callDate,
     }))
-  );
+  ).sort((a, b) => {
+    const priorityScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 };
+    return (
+      (priorityScore[b.priority ?? "Low"] ?? 1) -
+      (priorityScore[a.priority ?? "Low"] ?? 1)
+    );
+  });
+  const oasisOwned = questions.filter((question) => question.owner === "Oasis").length;
+  const customerOwned = questions.filter(
+    (question) => question.owner === "Customer"
+  ).length;
 
   return (
     <div className="tab-stack">
       <section className="section-block">
         <div className="section-head">
-          <h2>Questions overview</h2>
-          <span>{questions.length}</span>
+          <h2>Deal questions & actions</h2>
+          <span>{oasisOwned} Oasis · {customerOwned} Customer</span>
         </div>
         {questions.length ? (
           <div className="question-list">
             {questions.map((question, index) => (
               <article className="question-card" key={`${question.question}-${index}`}>
                 <div>
-                  <strong>{question.question}</strong>
+                  <strong>{question.action || question.question}</strong>
+                  {question.action && question.action !== question.question ? (
+                    <p>{question.question}</p>
+                  ) : null}
                   <span>
                     {question.callDate ? dateLabel(question.callDate) : "No date"} ·{" "}
                     {question.title}
+                    {question.askedBy ? ` · ${question.askedBy}` : ""}
                   </span>
                 </div>
-                <span className="risk-pill risk-medium">{question.status}</span>
+                <div className="question-badges">
+                  <span className={`risk-pill ${
+                    question.priority === "High"
+                      ? "risk-high"
+                      : question.priority === "Medium"
+                        ? "risk-medium"
+                        : "risk-low"
+                  }`}>
+                    {question.priority ?? "Low"}
+                  </span>
+                  <span className="risk-pill risk-medium">
+                    {question.owner ?? "Mutual"}
+                  </span>
+                </div>
               </article>
             ))}
           </div>
         ) : (
-          <div className="empty-state">No questions extracted yet.</div>
+          <div className="empty-state">No deal questions or actions extracted yet.</div>
         )}
       </section>
     </div>
@@ -1825,30 +2127,164 @@ function PainFitTab({ accountData }: { accountData: AccountData }) {
     transcript.signals.map((signal) => ({
       ...signal,
       title: transcript.title,
-      summary: transcript.summary,
+      summary: signal.summary || transcript.summary,
     }))
   );
+  const byCategory = signals.reduce<Record<string, number>>((counts, signal) => {
+    const category = signal.category ?? "Signal";
+    counts[category] = (counts[category] ?? 0) + 1;
+    return counts;
+  }, {});
 
   return (
     <div className="tab-stack">
       <section className="section-block">
         <div className="section-head">
-          <h2>Pain & fit intelligence</h2>
-          <span>{signals.length}</span>
+          <h2>Opportunity position</h2>
+          <span>
+            {Object.entries(byCategory)
+              .map(([category, count]) => `${category} ${count}`)
+              .join(" · ") || "0"}
+          </span>
         </div>
         {signals.length ? (
           <div className="signal-grid">
             {signals.map((signal, index) => (
               <article className={`signal-card signal-${signal.tone}`} key={index}>
+                <span>{signal.category ?? "Signal"} · {signal.title}</span>
                 <strong>{signal.label}</strong>
-                <span>{signal.title}</span>
                 <p>{signal.summary}</p>
+                {signal.evidence ? (
+                  <blockquote>{signal.evidence}</blockquote>
+                ) : null}
               </article>
             ))}
           </div>
         ) : (
-          <div className="empty-state">No pain or fit signals extracted yet.</div>
+          <div className="empty-state">No high-value deal signals extracted yet.</div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function SuccessCriteriaTab({
+  accountData,
+  accountName,
+  onAccountUpdate,
+}: {
+  accountData: AccountData;
+  accountName: string;
+  onAccountUpdate: (account: AccountData) => void;
+}) {
+  const [title, setTitle] = useState("Success criteria");
+  const [criteriaText, setCriteriaText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const savedCriteria = accountData.sources.filter((source) =>
+    /success criteria|scorecard|evaluation criteria|poc criteria|criteria/i.test(
+      `${source.title} ${source.summary}`
+    )
+  );
+
+  async function readCriteriaFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setTitle((current) => current || file.name.replace(/\.[^.]+$/, ""));
+    setCriteriaText(await file.text());
+  }
+
+  async function saveCriteria(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "source",
+          accountName,
+          sourceType: "file",
+          title,
+          summary: criteriaText,
+        }),
+      });
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? "Unable to save success criteria.");
+      }
+
+      onAccountUpdate(payload.account);
+      setTitle("Success criteria");
+      setCriteriaText("");
+      setFileName("");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to save success criteria."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="tab-stack">
+      <form className="section-block success-form" onSubmit={saveCriteria}>
+        <div className="section-head">
+          <h2>Upload success criteria</h2>
+          <span>{savedCriteria.length}</span>
+        </div>
+        <label className="file-drop">
+          <input
+            accept=".txt,.md,.csv,.doc,.docx"
+            onChange={(event) => void readCriteriaFile(event)}
+            type="file"
+          />
+          <strong>{fileName || "Choose criteria file"}</strong>
+          <span>TXT, MD, CSV, DOCX text export</span>
+        </label>
+        <label>
+          <span>Title</span>
+          <input
+            required
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Criteria text</span>
+          <textarea
+            className="research-textarea"
+            required
+            value={criteriaText}
+            onChange={(event) => setCriteriaText(event.target.value)}
+            placeholder="Paste evaluation criteria, POC scorecard, customer requirements, or success plan here..."
+          />
+        </label>
+        {error ? <div className="status-banner">{error}</div> : null}
+        <div className="form-actions">
+          <button className="primary-button" disabled={saving} type="submit">
+            {saving ? "Saving" : "Save criteria"}
+          </button>
+        </div>
+      </form>
+
+      <section className="section-block">
+        <div className="section-head">
+          <h2>Saved criteria</h2>
+          <span>{savedCriteria.length}</span>
+        </div>
+        <SourceList sources={savedCriteria} />
       </section>
     </div>
   );
@@ -1864,9 +2300,14 @@ function ResearchTab({
   onAccountUpdate: (account: AccountData) => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [briefTitle, setBriefTitle] = useState("Public account research");
+  const [briefSummary, setBriefSummary] = useState("");
+  const [briefSources, setBriefSources] = useState("");
+  const [error, setError] = useState("");
 
   async function queueResearch() {
     setSaving(true);
+    setError("");
     const response = await fetch("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1883,6 +2324,46 @@ function ResearchTab({
       onAccountUpdate(payload.account);
     }
     setSaving(false);
+  }
+
+  async function saveResearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "research",
+          accountName,
+          title: briefTitle,
+          status: "complete",
+          summary: briefSummary,
+          sources: parseSourceLines(briefSources),
+        }),
+      });
+      const payload = (await response.json()) as {
+        account?: AccountData;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.account) {
+        throw new Error(payload.error ?? "Unable to save research.");
+      }
+
+      onAccountUpdate(payload.account);
+      setBriefTitle("Public account research");
+      setBriefSummary("");
+      setBriefSources("");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error ? saveError.message : "Unable to save research."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1902,6 +2383,45 @@ function ResearchTab({
         </div>
       </section>
 
+      <form className="section-block research-form" onSubmit={saveResearch}>
+        <div className="section-head">
+          <h2>Save research brief</h2>
+          <span>complete</span>
+        </div>
+        <label>
+          <span>Title</span>
+          <input
+            required
+            value={briefTitle}
+            onChange={(event) => setBriefTitle(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Summary</span>
+          <textarea
+            className="research-textarea"
+            required
+            value={briefSummary}
+            onChange={(event) => setBriefSummary(event.target.value)}
+            placeholder="Paste the account research brief here..."
+          />
+        </label>
+        <label>
+          <span>Sources</span>
+          <textarea
+            value={briefSources}
+            onChange={(event) => setBriefSources(event.target.value)}
+            placeholder="Source title | https://example.com"
+          />
+        </label>
+        {error ? <div className="status-banner">{error}</div> : null}
+        <div className="form-actions">
+          <button className="primary-button" disabled={saving} type="submit">
+            {saving ? "Saving" : "Save brief"}
+          </button>
+        </div>
+      </form>
+
       <section className="section-block">
         <div className="section-head">
           <h2>Research briefs</h2>
@@ -1914,6 +2434,26 @@ function ResearchTab({
                 <span>{brief.status}</span>
                 <strong>{brief.title}</strong>
                 <p>{brief.summary}</p>
+                {brief.sources.length ? (
+                  <div className="source-links">
+                    {brief.sources.map((source, index) =>
+                      source.url ? (
+                        <a
+                          href={source.url}
+                          key={`${source.url}-${index}`}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          {source.title || source.url}
+                        </a>
+                      ) : (
+                        <span key={`${source.title}-${index}`}>
+                          {source.title}
+                        </span>
+                      )
+                    )}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
@@ -2094,9 +2634,10 @@ function TranscriptList({ transcripts }: { transcripts: CallTranscript[] }) {
           </div>
           <p>{transcript.summary}</p>
           <div className="tag-row">
-            {transcript.attendees.slice(0, 6).map((attendee) => (
-              <span key={attendee}>{attendee}</span>
-            ))}
+            {transcript.attendees.slice(0, 6).map((attendee) => {
+              const person = normalizePerson(attendee);
+              return <span key={person.name}>{person.name}</span>;
+            })}
           </div>
           <div className="tag-row">
             {transcript.signals.map((signal) => (

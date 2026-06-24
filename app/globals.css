@@ -872,7 +872,11 @@ tbody tr:hover {
   padding: 0 11px;
 }
 
+.context-form,
+.research-form,
+.success-form,
 .transcript-form {
+  display: grid;
   gap: 12px;
 }
 
@@ -929,6 +933,11 @@ tbody tr:hover {
   min-height: 190px;
 }
 
+.context-textarea,
+.research-textarea {
+  min-height: 220px;
+}
+
 .source-list,
 .transcript-list,
 .question-list {
@@ -953,6 +962,54 @@ tbody tr:hover {
   color: #a2afbf;
   line-height: 1.55;
   margin: 0;
+}
+
+.person-card-head,
+.question-badges {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.person-card-head strong {
+  min-width: 0;
+}
+
+.question-badges {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.signal-card blockquote {
+  background: rgba(137, 151, 174, 0.07);
+  border-left: 3px solid rgba(95, 230, 166, 0.45);
+  color: #c4cfdd;
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.source-links {
+  border-top: 1px solid rgba(137, 151, 174, 0.12);
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+}
+
+.source-links a,
+.source-links span {
+  color: #65d4ea;
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.source-links a:hover {
+  text-decoration: underline;
 }
 
 .transcript-card-head,
