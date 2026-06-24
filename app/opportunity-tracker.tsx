@@ -109,8 +109,22 @@ type TranscriptQuestion = {
   owner?: string;
   kind?: string;
   askedBy?: string;
+  answeredBy?: string;
+  answer?: string;
   action?: string;
   priority?: string;
+  time?: string;
+};
+
+type QuestionView = "person" | "timeline" | "open";
+type QuestionFilter = "all" | "open" | "answered";
+type QuestionStatus = "answered" | "deferred" | "action" | "open";
+
+type EnrichedQuestion = TranscriptQuestion & {
+  callDate: string;
+  person: TranscriptPerson;
+  status: QuestionStatus;
+  title: string;
 };
 
 type TranscriptSignal = {
@@ -361,6 +375,72 @@ function collectStakeholders(transcripts: CallTranscript[]) {
         ((a.mentionCount ?? 0) + (a.questionCount ?? 0))
       );
     });
+}
+
+function findQuestionPerson(
+  stakeholders: TranscriptPerson[],
+  question: TranscriptQuestion
+) {
+  const askedBy = question.askedBy || "Unknown speaker";
+  const inferredSide =
+    question.kind?.startsWith("oasis")
+      ? "oasis"
+      : question.kind?.startsWith("customer")
+        ? "customer"
+        : "unknown";
+  return (
+    stakeholders.find((person) => personMatches(person.name, askedBy)) ?? {
+      name: askedBy,
+      side: inferredSide,
+      role:
+        inferredSide === "oasis"
+          ? "Oasis team"
+          : question.owner === "Oasis"
+            ? "Customer stakeholder"
+            : "Deal participant",
+      influence: "Low",
+      mentionCount: 0,
+      questionCount: 0,
+    }
+  );
+}
+
+function normalizeQuestionStatus(question: TranscriptQuestion): QuestionStatus {
+  if (question.status === "deferred") return "deferred";
+  if (question.status === "action") return "action";
+  if (question.status === "answered" || question.answer) return "answered";
+  return "open";
+}
+
+function questionStatusLabel(status: QuestionStatus) {
+  if (status === "answered") return "Answered";
+  if (status === "deferred") return "Deferred";
+  if (status === "action") return "Follow-up owed";
+  return "Open loop";
+}
+
+function questionIsOpen(question: EnrichedQuestion) {
+  return question.status !== "answered";
+}
+
+function questionMatchesFilter(question: EnrichedQuestion, filter: QuestionFilter) {
+  if (filter === "answered") return question.status === "answered";
+  if (filter === "open") return questionIsOpen(question);
+  return true;
+}
+
+function questionPriorityRank(question: EnrichedQuestion) {
+  const priorityScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 };
+  const statusScore: Record<QuestionStatus, number> = {
+    action: 4,
+    open: 3,
+    deferred: 2,
+    answered: 1,
+  };
+  return (
+    (statusScore[question.status] ?? 1) * 10 +
+    (priorityScore[question.priority ?? "Low"] ?? 1)
+  );
 }
 
 function parseSourceLines(text: string) {
@@ -2057,68 +2137,224 @@ function StakeholdersTab({
 }
 
 function QuestionsTab({ accountData }: { accountData: AccountData }) {
-  const questions = accountData.transcripts.flatMap((transcript) =>
-    transcript.questions.map((question) => ({
-      ...question,
-      title: transcript.title,
-      callDate: transcript.callDate,
-    }))
-  ).sort((a, b) => {
-    const priorityScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 };
-    return (
-      (priorityScore[b.priority ?? "Low"] ?? 1) -
-      (priorityScore[a.priority ?? "Low"] ?? 1)
-    );
-  });
-  const oasisOwned = questions.filter((question) => question.owner === "Oasis").length;
-  const customerOwned = questions.filter(
-    (question) => question.owner === "Customer"
+  const [view, setView] = useState<QuestionView>("person");
+  const [filter, setFilter] = useState<QuestionFilter>("all");
+  const stakeholders = collectStakeholders(accountData.transcripts);
+  const questions = accountData.transcripts
+    .flatMap((transcript) =>
+      transcript.questions.map((question) => {
+        const status = normalizeQuestionStatus(question);
+        return {
+          ...question,
+          status,
+          title: transcript.title,
+          callDate: transcript.callDate,
+          person: findQuestionPerson(stakeholders, question),
+        };
+      })
+    )
+    .sort((a, b) => {
+      const dateDelta = (b.callDate || "").localeCompare(a.callDate || "");
+      if (dateDelta) return dateDelta;
+      return questionPriorityRank(b) - questionPriorityRank(a);
+    });
+  const activeFilter = view === "open" ? "open" : filter;
+  const visibleQuestions = questions.filter((question) =>
+    questionMatchesFilter(question, activeFilter)
+  );
+  const answered = questions.filter((question) => question.status === "answered").length;
+  const deferred = questions.filter((question) => question.status === "deferred").length;
+  const followUpOwed = questions.filter(
+    (question) =>
+      questionIsOpen(question) &&
+      (question.status === "action" || question.owner === "Oasis")
   ).length;
+  const openLoops = questions.filter(questionIsOpen).length;
+  const personGroups = Array.from(
+    visibleQuestions.reduce((groups, question) => {
+      const key = question.person.name;
+      const group = groups.get(key) ?? { person: question.person, questions: [] };
+      group.questions.push(question);
+      groups.set(key, group);
+      return groups;
+    }, new Map<string, { person: TranscriptPerson; questions: EnrichedQuestion[] }>())
+  ).map(([, group]) => group);
+  const timelineQuestions = [...visibleQuestions].sort((a, b) => {
+    const dateDelta = (a.callDate || "").localeCompare(b.callDate || "");
+    if (dateDelta) return dateDelta;
+    return (a.time || "").localeCompare(b.time || "");
+  });
+  const openLoopQuestions = visibleQuestions
+    .filter(questionIsOpen)
+    .sort((a, b) => questionPriorityRank(b) - questionPriorityRank(a));
+  const filterOptions: Array<[QuestionFilter, string]> =
+    view === "open"
+      ? [["open", "Open"]]
+      : [
+          ["all", "All"],
+          ["open", "Open"],
+          ["answered", "Answered"],
+        ];
 
   return (
     <div className="tab-stack">
-      <section className="section-block">
+      <section className="section-block questions-overview">
         <div className="section-head">
-          <h2>Deal questions & actions</h2>
-          <span>{oasisOwned} Oasis · {customerOwned} Customer</span>
+          <h2>Questions overview</h2>
+          <span>{questions.length} captured</span>
         </div>
-        {questions.length ? (
-          <div className="question-list">
-            {questions.map((question, index) => (
-              <article className="question-card" key={`${question.question}-${index}`}>
-                <div>
-                  <strong>{question.action || question.question}</strong>
-                  {question.action && question.action !== question.question ? (
-                    <p>{question.question}</p>
-                  ) : null}
-                  <span>
-                    {question.callDate ? dateLabel(question.callDate) : "No date"} ·{" "}
-                    {question.title}
-                    {question.askedBy ? ` · ${question.askedBy}` : ""}
-                  </span>
-                </div>
-                <div className="question-badges">
-                  <span className={`risk-pill ${
-                    question.priority === "High"
-                      ? "risk-high"
-                      : question.priority === "Medium"
-                        ? "risk-medium"
-                        : "risk-low"
-                  }`}>
-                    {question.priority ?? "Low"}
-                  </span>
-                  <span className="risk-pill risk-medium">
-                    {question.owner ?? "Mutual"}
-                  </span>
-                </div>
-              </article>
+        <div className="question-stat-row" aria-label="Question totals">
+          <span className="question-stat stat-total">Total: {questions.length}</span>
+          <span className="question-stat stat-answered">Answered: {answered}</span>
+          <span className="question-stat stat-deferred">Deferred: {deferred}</span>
+          <span className="question-stat stat-followup">Follow-up owed: {followUpOwed}</span>
+          <span className="question-stat stat-open">{openLoops} open loops</span>
+        </div>
+        <div className="question-toolbar">
+          <div className="question-control-group">
+            <span>View:</span>
+            {[
+              ["person", "By Person"],
+              ["timeline", "Timeline"],
+              ["open", "Open Loops"],
+            ].map(([id, label]) => (
+              <button
+                className={view === id ? "active" : ""}
+                key={id}
+                onClick={() => {
+                  const nextView = id as QuestionView;
+                  setView(nextView);
+                  if (nextView === "open") setFilter("open");
+                }}
+                type="button"
+              >
+                {label}
+              </button>
             ))}
           </div>
+          <div className="question-control-group">
+            <span>Filter:</span>
+            {filterOptions.map(([id, label]) => (
+              <button
+                className={activeFilter === id ? "active" : ""}
+                key={id}
+                onClick={() => setFilter(id)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {questions.length ? (
+          <>
+            {view === "person" ? (
+              <div className="question-person-list">
+                {personGroups.map((group) => (
+                  <section className="question-person-group" key={group.person.name}>
+                    <div className="question-person-head">
+                      <div>
+                        <h3>{group.person.name}</h3>
+                        <span>
+                          {[group.person.title, group.person.company]
+                            .filter(Boolean)
+                            .join(" · ") || "Stakeholder"}
+                        </span>
+                      </div>
+                      <div className="question-person-meta">
+                        <span className="role-pill">{group.person.role}</span>
+                        <strong>{group.questions.length} QS</strong>
+                      </div>
+                    </div>
+                    <div className="question-list">
+                      {group.questions.map((question, index) => (
+                        <QuestionCard
+                          key={`${question.person.name}-${question.question}-${index}`}
+                          question={question}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : null}
+
+            {view === "timeline" ? (
+              <div className="question-timeline">
+                {timelineQuestions.map((question, index) => (
+                  <div className="question-timeline-row" key={`${question.question}-${index}`}>
+                    <span>
+                      {question.callDate ? dateLabel(question.callDate) : "No date"}
+                      {question.time ? ` · ${question.time}` : ""}
+                    </span>
+                    <QuestionCard question={question} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {view === "open" ? (
+              <div className="question-list">
+                {openLoopQuestions.map((question, index) => (
+                  <QuestionCard key={`${question.question}-${index}`} question={question} />
+                ))}
+              </div>
+            ) : null}
+
+            {!visibleQuestions.length || (view === "open" && !openLoopQuestions.length) ? (
+              <div className="empty-state">No questions match this view.</div>
+            ) : null}
+          </>
         ) : (
           <div className="empty-state">No deal questions or actions extracted yet.</div>
         )}
       </section>
     </div>
+  );
+}
+
+function QuestionCard({ question }: { question: EnrichedQuestion }) {
+  const statusClass =
+    question.status === "answered"
+      ? "answered"
+      : question.status === "deferred"
+        ? "deferred"
+        : "open";
+  const answerText =
+    question.answer ||
+    (question.status === "answered"
+      ? "Answered on the call."
+      : "No captured answer yet.");
+
+  return (
+    <article className={`question-card question-card-${statusClass}`}>
+      <div className="question-card-main">
+        <span className="question-source">
+          from {question.callDate ? dateLabel(question.callDate) : "No date"}
+          {question.time ? ` at ${question.time}` : ""} · {question.title}
+        </span>
+        <strong>&quot;{question.question}&quot;</strong>
+        <p className={question.answer ? "question-answer" : "question-answer muted"}>
+          {question.answer ? `${question.answeredBy || "Answer"}: ${answerText}` : answerText}
+        </p>
+      </div>
+      <div className="question-badges">
+        <span className={`question-status-pill status-${statusClass}`}>
+          {questionStatusLabel(question.status)}
+        </span>
+        <span className="risk-pill risk-medium">{question.owner ?? "Mutual"}</span>
+        <span className={`risk-pill ${
+          question.priority === "High"
+            ? "risk-high"
+            : question.priority === "Medium"
+              ? "risk-medium"
+              : "risk-low"
+        }`}>
+          {question.priority ?? "Low"}
+        </span>
+      </div>
+    </article>
   );
 }
 

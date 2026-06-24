@@ -23,7 +23,7 @@ type AccountSummary = AccountProfileRow & {
   weightedPipeline: number;
 };
 
-type SpeakerTurn = { speaker: string; text: string };
+type SpeakerTurn = { speaker: string; text: string; time?: string };
 
 type PersonInsight = {
   name: string;
@@ -38,12 +38,15 @@ type PersonInsight = {
 
 type DealQuestion = {
   question: string;
-  status: "open" | "answered" | "action";
+  status: "open" | "answered" | "deferred" | "action";
   owner: "Oasis" | "Customer" | "Mutual";
   kind: "customer_question" | "oasis_question" | "oasis_action" | "customer_action";
   askedBy: string;
+  answeredBy: string;
+  answer: string;
   action: string;
   priority: "High" | "Medium" | "Low";
+  time: string;
 };
 
 type DealSignal = {
@@ -528,7 +531,7 @@ function isNoisyQuestion(question: string) {
 
 function isDealRelevantQuestion(question: string) {
   const normalized = question.toLowerCase();
-  return /success criteria|criteria|scorecard|poc|proof|pilot|timeline|close|decision|approval|procurement|legal|contract|budget|pricing|security|risk|compliance|integration|api|sso|scim|okta|azure|service now|servicenow|cyberark|vault|deployment|install|sandbox|production|owner|stakeholder|champion|executive|technical|architecture|data|access|requirements?|next step|follow up/.test(
+  return /success criteria|criteria|scorecard|poc|proof|pilot|timeline|close|decision|approval|procurement|legal|contract|budget|pricing|security|risk|compliance|integrat|api|sso|scim|okta|azure|service now|servicenow|cyberark|vault|deployment|install|sandbox|production|owner|stakeholder|champion|executive|technical|architecture|data|access|requirements?|next step|follow up/.test(
     normalized
   );
 }
@@ -545,8 +548,9 @@ function priorityForText(text: string): DealQuestion["priority"] {
 }
 
 function extractSpeakerTurns(text: string) {
-  const turns: { speaker: string; text: string }[] = [];
+  const turns: SpeakerTurn[] = [];
   let currentSpeaker = "";
+  let currentTime = "";
   let currentText: string[] = [];
 
   function pushTurn() {
@@ -554,6 +558,7 @@ function extractSpeakerTurns(text: string) {
       turns.push({
         speaker: currentSpeaker,
         text: currentText.join(" ").replace(/\s+/g, " ").trim(),
+        time: currentTime,
       });
     }
   }
@@ -563,19 +568,21 @@ function extractSpeakerTurns(text: string) {
     if (!line) continue;
 
     const timestampSpeaker = line.match(
-      /^\d{1,2}:\d{2}(?::\d{2})?\s*\|\s*([A-Z][A-Za-z .'-]{1,48})\s*$/
+      /^(\d{1,2}:\d{2}(?::\d{2})?)\s*\|\s*([A-Z][A-Za-z .'-]{1,48})\s*$/
     );
     const colonSpeaker = line.match(/^([A-Z][A-Za-z .'-]{1,48}):\s*(.+)$/);
 
     if (timestampSpeaker) {
       pushTurn();
-      currentSpeaker = timestampSpeaker[1].trim();
+      currentTime = timestampSpeaker[1].trim();
+      currentSpeaker = timestampSpeaker[2].trim();
       currentText = [];
       continue;
     }
 
     if (colonSpeaker) {
       pushTurn();
+      currentTime = "";
       currentSpeaker = colonSpeaker[1].trim();
       currentText = [colonSpeaker[2].trim()];
       continue;
@@ -610,6 +617,53 @@ function ownerForQuestion(side: PersonInsight["side"]): DealQuestion["owner"] {
   return "Mutual";
 }
 
+function sideForSpeaker(attendees: PersonInsight[], speaker: string) {
+  return attendees.find((attendee) =>
+    speakerMatchesPerson(attendee.name, speaker)
+  )?.side ?? "unknown";
+}
+
+function firstAnswerSentence(text: string) {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+    .find((sentence) => sentence.length >= 28 && !sentence.endsWith("?"))
+    ?.slice(0, 340) ?? "";
+}
+
+function isDeferredAnswer(text: string) {
+  return /follow up|get back|circle back|take away|take offline|check on|not sure|don't know|do not know|need to verify|need to check|need to confirm|will confirm|confirm with/i.test(
+    text
+  );
+}
+
+function answerForQuestion(
+  turns: SpeakerTurn[],
+  startIndex: number,
+  attendees: PersonInsight[],
+  askerSide: PersonInsight["side"]
+): Pick<DealQuestion, "answer" | "answeredBy" | "status"> {
+  const expectedOwner = ownerForQuestion(askerSide);
+
+  for (const turn of turns.slice(startIndex + 1, startIndex + 5)) {
+    const responseSide = sideForSpeaker(attendees, turn.speaker);
+    if (askerSide !== "unknown" && responseSide === askerSide) continue;
+    if (expectedOwner === "Oasis" && responseSide === "customer") continue;
+    if (expectedOwner === "Customer" && responseSide === "oasis") continue;
+
+    const answer = firstAnswerSentence(turn.text);
+    if (!answer) continue;
+
+    return {
+      answer,
+      answeredBy: turn.speaker,
+      status: isDeferredAnswer(answer) ? "deferred" : "answered",
+    };
+  }
+
+  return { answer: "", answeredBy: "", status: "open" };
+}
+
 function actionItemsFromTurn(turn: SpeakerTurn, side: PersonInsight["side"]) {
   const actions: string[] = [];
   const sentences = turn.text
@@ -619,8 +673,10 @@ function actionItemsFromTurn(turn: SpeakerTurn, side: PersonInsight["side"]) {
 
   for (const sentence of sentences) {
     const normalized = sentence.toLowerCase();
+    if (sentence.endsWith("?")) continue;
+
     if (
-      /(?:^|\b)(we|i|you|oasis|customer|team)\s+(?:will|can|should|need to|have to|are going to|going to)|send|share|schedule|book|confirm|follow up|circle back|introduce|provide|review|validate|finalize|approve|sign|lock/.test(
+      /(?:^|\b)(we|i|you|oasis|customer|team)\s+(?:will|can|should|need to|have to|are going to|going to)|\b(send|share|schedule|book|confirm|follow up|circle back|introduce|provide|review|validate|finalize|approve|sign|lock)\b/.test(
         normalized
       ) &&
       /success criteria|criteria|poc|pilot|demo|security|procurement|legal|contract|budget|pricing|timeline|next step|follow up|documentation|requirements?|integration|sandbox|production|decision|approval|stakeholder|champion|meeting|call|deck|materials/.test(
@@ -639,8 +695,11 @@ function actionItemsFromTurn(turn: SpeakerTurn, side: PersonInsight["side"]) {
       owner,
       kind: owner === "Customer" ? "customer_action" : "oasis_action",
       askedBy: turn.speaker,
+      answeredBy: "",
+      answer: "",
       action,
       priority: priorityForText(action),
+      time: turn.time ?? "",
     };
   });
 }
@@ -652,7 +711,7 @@ function detectQuestions(
 ) {
   const questions: DealQuestion[] = [];
 
-  for (const turn of turns) {
+  for (const [index, turn] of turns.entries()) {
     const person = attendees.find((attendee) =>
       speakerMatchesPerson(attendee.name, turn.speaker)
     );
@@ -660,19 +719,27 @@ function detectQuestions(
 
     for (const question of questionFragments(turn.text)) {
       const owner = ownerForQuestion(side);
+      const answer = answerForQuestion(turns, index, attendees, side);
       questions.push({
         question,
-        status: "open",
+        status: answer.status,
         owner,
         kind: side === "oasis" ? "oasis_question" : "customer_question",
         askedBy: turn.speaker,
+        answeredBy: answer.answeredBy,
+        answer: answer.answer,
         action:
-          owner === "Oasis"
+          answer.status === "answered"
+            ? "Answered on call"
+            : answer.status === "deferred"
+              ? `${owner} follow-up owed`
+              : owner === "Oasis"
             ? "Oasis response needed"
             : owner === "Customer"
               ? "Customer response needed"
               : "Mutual follow-up needed",
         priority: priorityForText(question),
+        time: turn.time ?? "",
       });
     }
 
