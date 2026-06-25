@@ -288,12 +288,16 @@ function cleanPersonName(value: string) {
     .trim();
 }
 
-function inferSide(text: string, sectionIndex = -1): PersonInsight["side"] {
+function inferSide(
+  text: string,
+  sectionIndex = -1,
+  allowCustomerFallback = false
+): PersonInsight["side"] {
   const normalized = text.toLowerCase();
   if (/\boasis\b|brendan|adam fisher|sales engineer|account executive/.test(normalized)) {
     return "oasis";
   }
-  if (sectionIndex > 0) return "customer";
+  if (sectionIndex > 0 || allowCustomerFallback) return "customer";
   return "unknown";
 }
 
@@ -335,6 +339,27 @@ function parseParticipantPeople(text: string) {
     const line = rawLine.trim();
     if (!line) continue;
 
+    const dashParts = line.split(/\s+[–-]\s+/).map((item) => item.trim());
+    if (dashParts.length >= 2) {
+      const [rawName, ...rest] = dashParts;
+      const name = cleanPersonName(rawName);
+      if (!/^[A-Z][A-Za-z .'-]{1,60}$/.test(name)) continue;
+
+      const company = rest.length > 1 ? rest[rest.length - 1] : sectionLabel;
+      const title = (rest.length > 1 ? rest.slice(0, -1) : rest).join(" - ").slice(0, 160);
+      people.push({
+        name,
+        title,
+        company,
+        side: inferSide(`${company} ${title} ${name}`, sectionIndex, true),
+        role: inferRole(title, ""),
+        influence: "Low",
+        mentionCount: 0,
+        questionCount: 0,
+      });
+      continue;
+    }
+
     if (!line.includes(",")) {
       sectionIndex += 1;
       sectionLabel = line;
@@ -350,7 +375,7 @@ function parseParticipantPeople(text: string) {
       name,
       title,
       company: sectionLabel,
-      side: inferSide(`${sectionLabel} ${title}`, sectionIndex),
+      side: inferSide(`${sectionLabel} ${title} ${name}`, sectionIndex, true),
       role: inferRole(title, ""),
       influence: "Low",
       mentionCount: 0,
@@ -463,7 +488,9 @@ function detectAttendees(text: string, turns = extractSpeakerTurns(text)) {
       name,
       title: participant?.title ?? "",
       company: participant?.company ?? "",
-      side: participant?.side ?? inferSide(`${participant?.company ?? ""} ${speakerText}`),
+      side:
+        participant?.side ??
+        inferSide(`${participant?.company ?? ""} ${participant?.title ?? ""} ${name}`),
       role,
       influence: inferInfluence(role, questionCount),
       mentionCount: speakerTurns.length,
@@ -480,27 +507,42 @@ function detectAttendees(text: string, turns = extractSpeakerTurns(text)) {
 }
 
 function isNoisyQuestion(question: string) {
-  const normalized = question.toLowerCase();
+  const normalized = question
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
   const attendanceOrSetupChatter =
-    /\b(join|joining|attend|attending|dial|camera|audio|hear|recorded|teams|zoom)\b/.test(
+    /\b(join|joining|attend|attending|dial|camera|audio|hear|recorded|recording|teams|zoom|screen|share|slides)\b/.test(
       normalized
     ) &&
-    /\b(today|call|meeting|audio|camera|teams|zoom|joining|attend|attending|hear)\b/.test(
+    /\b(today|call|meeting|audio|camera|teams|zoom|joining|attend|attending|hear|see|screen|slides)\b/.test(
       normalized
     );
   const tagQuestion =
-    /\b(right|correct|ok|okay|cool|fair|make sense|sound good)\?$/.test(
+    /\b(right|correct|ok|okay|cool|fair|make sense|sound good|yeah|yep)\?$/.test(
       normalized
     );
   const noShowQuestion =
     /\b(won't|will not|isn't|is not|can't|cannot)\s+(be\s+)?(join|joining|attend|attending|make)\b/.test(
       normalized
     );
+  const lowValuePrompt =
+    (/\b(any questions|questions so far|anything else|does that make sense|is that helpful|are we good|ready to rock|can you hear|see my screen|everyone here|who else is joining)\b/.test(
+      normalized
+    ) ||
+      /\bwhat else\b/.test(normalized)) &&
+    !isDealRelevantQuestion(normalized);
+  const weakPronounOnly =
+    /^(is|are|does|do|did|was|were|would|could|can)\s+(it|this|that|these|those|things|stuff)\b/.test(
+      normalized
+    ) && !isDealRelevantQuestion(normalized);
 
   return (
     attendanceOrSetupChatter ||
     tagQuestion ||
     noShowQuestion ||
+    lowValuePrompt ||
+    weakPronounOnly ||
     [
       "are we ready to rock",
       "background here real quick",
@@ -525,14 +567,53 @@ function isNoisyQuestion(question: string) {
       "any questions",
       "cool?",
       "right?",
+      "is everyone",
+      "who's on",
     ].some((phrase) => normalized.includes(phrase))
   );
 }
 
 function isDealRelevantQuestion(question: string) {
   const normalized = question.toLowerCase();
-  return /success criteria|criteria|scorecard|poc|proof|pilot|timeline|close|decision|approval|procurement|legal|contract|budget|pricing|security|risk|compliance|integrat|api|sso|scim|okta|azure|service now|servicenow|cyberark|vault|deployment|install|sandbox|production|owner|stakeholder|champion|executive|technical|architecture|data|access|requirements?|next step|follow up/.test(
-    normalized
+  const dealProcess =
+    /success criteria|criteria|scorecard|evaluation|decision criteria|poc|proof|pilot|timeline|close|decision|approval|procurement|legal|contract|budget|pricing|commercial|renewal|security review|vendor assessment|risk|compliance|requirements?|next step|follow up|scope|success metric|business case|roi|value|priority|blocker|blocked/.test(
+      normalized
+    );
+  const technicalFit =
+    /integrat|api|sso|scim|okta|azure|service now|servicenow|cyberark|hashicorp|vault|deployment|install|sandbox|production|architecture|data|access|permission|owner|secrets?|credential|rotation|remediation|resolve|dismiss|flagged|mcp|\bai\b|genai|agentic|model/.test(
+      normalized
+    );
+  const buyingCommittee =
+    /stakeholder|champion|executive|economic buyer|ciso|cio|cto|security team|identity team|procurement team/.test(
+      normalized
+    );
+
+  return dealProcess || technicalFit || buyingCommittee;
+}
+
+function isHighSignalCustomerQuestion(question: string) {
+  const normalized = question.toLowerCase();
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const startsAsRealAsk =
+    /^(can|could|would|do|does|did|is|are|will|should|how|what|when|who|where|why)\b/.test(
+      normalized
+    );
+  const customerAsk =
+    startsAsRealAsk ||
+    /\b(i|we)\b.{0,90}\b(want|need|have to|would like|are trying|trying to|don't know|do not know|need to know|have a question)\b/.test(
+      normalized
+    );
+  const hasSubstance =
+    /success criteria|criteria|scorecard|evaluation|poc|proof|pilot|vendor assessment|decision|approval|procurement|legal|contract|budget|pricing|timeline|security|compliance|risk|requirements?|integrat|api|sso|scim|okta|azure|service now|servicenow|cyberark|hashicorp|vault|deployment|sandbox|production|architecture|data|access|permission|owner|secrets?|credential|rotation|remediation|resolve|dismiss|flagged|business case|roi|value|scope|next demo|next call|next step|mcp|\bai\b|genai|agentic|model/.test(
+      normalized
+    );
+
+  return (
+    wordCount >= 6 &&
+    wordCount <= 70 &&
+    customerAsk &&
+    hasSubstance &&
+    isDealRelevantQuestion(normalized)
   );
 }
 
@@ -541,7 +622,7 @@ function priorityForText(text: string): DealQuestion["priority"] {
   if (/success criteria|decision|approval|procurement|legal|contract|budget|pricing|security review|timeline|close|blocked|risk/.test(normalized)) {
     return "High";
   }
-  if (/poc|pilot|integration|deployment|requirements?|follow up|next step/.test(normalized)) {
+  if (/poc|pilot|integrat|deployment|requirements?|follow up|next step|sandbox|production/.test(normalized)) {
     return "Medium";
   }
   return "Low";
@@ -623,25 +704,122 @@ function sideForSpeaker(attendees: PersonInsight[], speaker: string) {
   )?.side ?? "unknown";
 }
 
-function firstAnswerSentence(text: string) {
-  return text
+function answerSentenceForQuestion(text: string, question: string) {
+  const sentences = text
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
-    .find((sentence) => sentence.length >= 28 && !sentence.endsWith("?"))
-    ?.slice(0, 340) ?? "";
+    .filter((sentence) => sentence.length >= 28 && !sentence.endsWith("?"));
+  const needsConcreteFollowUp =
+    /success criteria|scorecard|evaluation|approval|procurement|legal|contract|budget|pricing|security review|timeline|close/.test(
+      question.toLowerCase()
+    );
+  const deferred = sentences.find(isDeferredAnswer);
+
+  if (needsConcreteFollowUp && deferred) return deferred.slice(0, 340);
+
+  const questionTokens = importantQuestionTokens(question);
+  const scored = sentences
+    .map((sentence, index) => ({
+      sentence,
+      score: answerRelevanceScore(sentence, question, questionTokens),
+      index,
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  return (scored[0]?.sentence ?? "").slice(0, 340);
 }
 
 function isDeferredAnswer(text: string) {
-  return /follow up|get back|circle back|take away|take offline|check on|not sure|don't know|do not know|need to verify|need to check|need to confirm|will confirm|confirm with/i.test(
+  return /follow up|get back|circle back|take away|take offline|check on|not sure|don't know|do not know|need to verify|need to check|need to confirm|will confirm|confirm with|next call|next meeting|next check-in|working session/i.test(
     text
   );
+}
+
+function importantQuestionTokens(text: string) {
+  const stopWords = new Set([
+    "about",
+    "after",
+    "also",
+    "anything",
+    "areas",
+    "before",
+    "being",
+    "besides",
+    "could",
+    "does",
+    "have",
+    "into",
+    "just",
+    "know",
+    "like",
+    "more",
+    "some",
+    "something",
+    "that",
+    "their",
+    "there",
+    "these",
+    "thing",
+    "things",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+    "you",
+    "your",
+  ]);
+
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.replace(/s$/, ""))
+    .filter((token) => token.length >= 4 && !stopWords.has(token));
+}
+
+function answerRelevanceScore(
+  sentence: string,
+  question: string,
+  questionTokens: string[]
+) {
+  const normalizedSentence = sentence.toLowerCase();
+  const normalizedQuestion = question.toLowerCase();
+  const domainTerms = [
+    "azure",
+    "cyberark",
+    "hashicorp",
+    "okta",
+    "sandbox",
+    "scorecard",
+    "servicenow",
+    "service now",
+    "success criteria",
+    "vault",
+  ];
+  let score = 0;
+
+  for (const term of domainTerms) {
+    if (normalizedQuestion.includes(term) && normalizedSentence.includes(term)) {
+      score += 8;
+    }
+  }
+
+  for (const token of questionTokens) {
+    if (normalizedSentence.includes(token)) score += 1;
+  }
+
+  return score;
 }
 
 function answerForQuestion(
   turns: SpeakerTurn[],
   startIndex: number,
   attendees: PersonInsight[],
-  askerSide: PersonInsight["side"]
+  askerSide: PersonInsight["side"],
+  question: string
 ): Pick<DealQuestion, "answer" | "answeredBy" | "status"> {
   const expectedOwner = ownerForQuestion(askerSide);
 
@@ -651,7 +829,7 @@ function answerForQuestion(
     if (expectedOwner === "Oasis" && responseSide === "customer") continue;
     if (expectedOwner === "Customer" && responseSide === "oasis") continue;
 
-    const answer = firstAnswerSentence(turn.text);
+    const answer = answerSentenceForQuestion(turn.text, question);
     if (!answer) continue;
 
     return {
@@ -662,46 +840,6 @@ function answerForQuestion(
   }
 
   return { answer: "", answeredBy: "", status: "open" };
-}
-
-function actionItemsFromTurn(turn: SpeakerTurn, side: PersonInsight["side"]) {
-  const actions: string[] = [];
-  const sentences = turn.text
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  for (const sentence of sentences) {
-    const normalized = sentence.toLowerCase();
-    if (sentence.endsWith("?")) continue;
-
-    if (
-      /(?:^|\b)(we|i|you|oasis|customer|team)\s+(?:will|can|should|need to|have to|are going to|going to)|\b(send|share|schedule|book|confirm|follow up|circle back|introduce|provide|review|validate|finalize|approve|sign|lock)\b/.test(
-        normalized
-      ) &&
-      /success criteria|criteria|poc|pilot|demo|security|procurement|legal|contract|budget|pricing|timeline|next step|follow up|documentation|requirements?|integration|sandbox|production|decision|approval|stakeholder|champion|meeting|call|deck|materials/.test(
-        normalized
-      )
-    ) {
-      actions.push(sentence);
-    }
-  }
-
-  return actions.slice(0, 3).map((action) => {
-    const owner = side === "customer" ? "Customer" : side === "oasis" ? "Oasis" : "Mutual";
-    return {
-      question: action,
-      status: "action" as const,
-      owner,
-      kind: owner === "Customer" ? "customer_action" : "oasis_action",
-      askedBy: turn.speaker,
-      answeredBy: "",
-      answer: "",
-      action,
-      priority: priorityForText(action),
-      time: turn.time ?? "",
-    };
-  });
 }
 
 function detectQuestions(
@@ -718,8 +856,11 @@ function detectQuestions(
     const side = person?.side ?? "unknown";
 
     for (const question of questionFragments(turn.text)) {
+      if (side !== "customer") continue;
+      if (!isHighSignalCustomerQuestion(question)) continue;
+
       const owner = ownerForQuestion(side);
-      const answer = answerForQuestion(turns, index, attendees, side);
+      const answer = answerForQuestion(turns, index, attendees, side, question);
       questions.push({
         question,
         status: answer.status,
@@ -742,8 +883,6 @@ function detectQuestions(
         time: turn.time ?? "",
       });
     }
-
-    questions.push(...actionItemsFromTurn(turn, side));
   }
 
   const unique = new Map<string, DealQuestion>();

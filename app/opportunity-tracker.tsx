@@ -443,6 +443,13 @@ function questionPriorityRank(question: EnrichedQuestion) {
   );
 }
 
+function isCustomerDealQuestion(question: TranscriptQuestion, person: TranscriptPerson) {
+  if (question.kind?.startsWith("oasis")) return false;
+  if (person.side === "oasis") return false;
+  if (question.kind?.startsWith("customer")) return true;
+  return person.side === "customer";
+}
+
 function parseSourceLines(text: string) {
   return text
     .split("\n")
@@ -2144,15 +2151,17 @@ function QuestionsTab({ accountData }: { accountData: AccountData }) {
     .flatMap((transcript) =>
       transcript.questions.map((question) => {
         const status = normalizeQuestionStatus(question);
+        const person = findQuestionPerson(stakeholders, question);
         return {
           ...question,
           status,
           title: transcript.title,
           callDate: transcript.callDate,
-          person: findQuestionPerson(stakeholders, question),
+          person,
         };
       })
     )
+    .filter((question) => isCustomerDealQuestion(question, question.person))
     .sort((a, b) => {
       const dateDelta = (b.callDate || "").localeCompare(a.callDate || "");
       if (dateDelta) return dateDelta;
