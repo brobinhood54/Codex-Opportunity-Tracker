@@ -717,6 +717,12 @@ function answerOwnerForSide(
   return fallback;
 }
 
+function sideForAnswerOwner(owner: DealQuestion["answerOwner"]): PersonInsight["side"] {
+  if (owner === "Customer") return "customer";
+  if (owner === "Oasis") return "oasis";
+  return "unknown";
+}
+
 function sideForSpeaker(attendees: PersonInsight[], speaker: string) {
   return attendees.find((attendee) =>
     speakerMatchesPerson(attendee.name, speaker)
@@ -728,6 +734,19 @@ function answerSentencesFromTurn(text: string) {
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
     .filter((sentence) => sentence.length >= 28 && !sentence.endsWith("?"));
+}
+
+function answerTextFromSentences(sentences: string[], startIndex: number) {
+  const answerParts: string[] = [];
+
+  for (const sentence of sentences.slice(startIndex, startIndex + 4)) {
+    if (isBridgeAnswer(sentence) || isClarifyingPrompt(sentence)) break;
+    answerParts.push(sentence);
+
+    if (answerParts.join(" ").length >= 620) break;
+  }
+
+  return answerParts.join(" ").slice(0, 700);
 }
 
 function isDeferredAnswer(text: string) {
@@ -782,9 +801,12 @@ function bridgeAnswerOwner(
   if (
     askerSide === "customer" &&
     responderSide === "oasis" &&
-    /\b(leave|defer|hand|turn|pass|over to)\b.{0,80}\b(you|customer|team)\b/.test(
+    (/\b(leave|defer|hand|turn|pass|over to)\b.{0,80}\b(you|customer|team)\b/.test(
       normalized
-    )
+    ) ||
+      /\b(you|customer|team)\b.{0,80}\b(details|context|answer|speak to|cover)\b/.test(
+        normalized
+      ))
   ) {
     return "Customer";
   }
@@ -857,26 +879,32 @@ function bestAnswerCandidateForTurn(
   askerSide: PersonInsight["side"],
   sawBridge: boolean
 ): AnswerCandidate | null {
+  const expectedSide = sideForAnswerOwner(expectedOwner);
   const candidates = answerSentencesFromTurn(turn.text)
     .filter((sentence) => !isBridgeAnswer(sentence) && !isClarifyingPrompt(sentence))
-    .map((sentence, sentenceIndex): AnswerCandidate => ({
-      answer: sentence.slice(0, 420),
-      answeredBy: turn.speaker,
-      answerOwner: answerOwnerForSide(responseSide, expectedOwner),
-      status: isDeferredAnswer(sentence) ? "deferred" : "answered",
-      score: answerCandidateScore(
-        sentence,
-        question,
-        questionTokens,
-        responseSide,
-        expectedOwner,
-        askerSide,
-        turnDistance,
-        sawBridge
-      ),
-      turnIndex: turnDistance + sentenceIndex / 100,
-    }))
-    .filter((candidate) => candidate.score >= 3);
+    .map((sentence, sentenceIndex, sentences): AnswerCandidate => {
+      const answerStart =
+        sawBridge && responseSide === expectedSide ? 0 : sentenceIndex;
+
+      return {
+        answer: answerTextFromSentences(sentences, answerStart),
+        answeredBy: turn.speaker,
+        answerOwner: answerOwnerForSide(responseSide, expectedOwner),
+        status: isDeferredAnswer(sentence) ? "deferred" : "answered",
+        score: answerCandidateScore(
+          sentence,
+          question,
+          questionTokens,
+          responseSide,
+          expectedOwner,
+          askerSide,
+          turnDistance,
+          sawBridge
+        ),
+        turnIndex: turnDistance + sentenceIndex / 100,
+      };
+    })
+    .filter((candidate) => candidate.answer && candidate.score >= 3);
 
   return (
     candidates.sort((a, b) => b.score - a.score || a.turnIndex - b.turnIndex)[0] ??
@@ -1042,13 +1070,15 @@ function answerForQuestion(
       };
     }
 
+    const currentAnswerOwner =
+      sawBridge && bridgeCandidate ? bridgeCandidate.answerOwner : expectedOwner;
     const candidate = bestAnswerCandidateForTurn(
       turn,
       offset,
       question,
       questionTokens,
       responseSide,
-      expectedOwner,
+      currentAnswerOwner,
       askerSide,
       sawBridge
     );
