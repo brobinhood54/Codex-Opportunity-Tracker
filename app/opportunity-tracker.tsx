@@ -2420,7 +2420,14 @@ function QuestionCard({ question }: { question: EnrichedQuestion }) {
           </div>
         ) : null}
         <p className={question.answer ? "question-answer" : "question-answer muted"}>
-          {question.answer ? `${question.answeredBy || "Answer"}: ${answerText}` : answerText}
+          {question.answer ? (
+            <>
+              <span className="question-answer-label">Captured answer</span>
+              <span>{question.answeredBy || "Answer"}: {answerText}</span>
+            </>
+          ) : (
+            answerText
+          )}
         </p>
       </div>
       <div className="question-badges">

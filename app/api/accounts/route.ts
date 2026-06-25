@@ -51,6 +51,14 @@ type DealQuestion = {
   timeline: string;
 };
 
+type AnswerCandidate = Pick<
+  DealQuestion,
+  "answer" | "answeredBy" | "answerOwner" | "status"
+> & {
+  score: number;
+  turnIndex: number;
+};
+
 type DealSignal = {
   label: string;
   tone: "risk" | "positive" | "watch" | "action";
@@ -700,40 +708,179 @@ function ownerForQuestion(side: PersonInsight["side"]): DealQuestion["owner"] {
   return "Mutual";
 }
 
+function answerOwnerForSide(
+  side: PersonInsight["side"],
+  fallback: DealQuestion["answerOwner"]
+): DealQuestion["answerOwner"] {
+  if (side === "customer") return "Customer";
+  if (side === "oasis") return "Oasis";
+  return fallback;
+}
+
 function sideForSpeaker(attendees: PersonInsight[], speaker: string) {
   return attendees.find((attendee) =>
     speakerMatchesPerson(attendee.name, speaker)
   )?.side ?? "unknown";
 }
 
-function answerSentenceForQuestion(text: string, question: string) {
-  const sentences = text
+function answerSentencesFromTurn(text: string) {
+  return text
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
     .filter((sentence) => sentence.length >= 28 && !sentence.endsWith("?"));
-  const needsConcreteFollowUp =
-    /success criteria|scorecard|evaluation|approval|procurement|legal|contract|budget|pricing|security review|timeline|close/.test(
-      question.toLowerCase()
-    );
-  const deferred = sentences.find(isDeferredAnswer);
-
-  if (needsConcreteFollowUp && deferred) return deferred.slice(0, 340);
-
-  const questionTokens = importantQuestionTokens(question);
-  const scored = sentences
-    .map((sentence, index) => ({
-      sentence,
-      score: answerRelevanceScore(sentence, question, questionTokens),
-      index,
-    }))
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-
-  return (scored[0]?.sentence ?? "").slice(0, 340);
 }
 
 function isDeferredAnswer(text: string) {
   return /follow up|get back|circle back|take away|take offline|check on|not sure|don't know|do not know|need to verify|need to check|need to confirm|will confirm|confirm with|next call|next meeting|next check-in|working session/i.test(
     text
+  );
+}
+
+function isBridgeAnswer(text: string) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+
+  const explicitHandoff =
+    /(\bi'?ll\b|\bi will\b|\bhe'?s\b|\bshe'?s\b|\bthey'?re\b|\bwe'?re\b).{0,80}\b(leave|hand|turn|defer|pass)\b.{0,80}\b(to|over)\b/.test(
+      normalized
+    ) ||
+    /\b(leave|hand|turn|defer|pass)\b.{0,80}\b(to|over)\b.{0,80}\b(you|tony|menley|brendan|adam|team)\b/.test(
+      normalized
+    );
+  const reportedHandoff =
+    /\b(he|she|they|tony)\s+said\b.{0,80}\b(coming|cover|details|walk through|walk you through)\b/.test(
+      normalized
+    );
+  const contextTransfer =
+    /\b(give|provide|share|walk through)\b.{0,60}\b(details|context|background)\b/.test(
+      normalized
+    ) && /\b(leave|defer|over to|coming)\b/.test(normalized);
+  const speakerDeferral =
+    /\b(i do not want to speak for|i don't want to speak for|better for .* to answer|let .* cover|let .* speak|over to you|you can probably speak to)\b/.test(
+      normalized
+    );
+
+  return explicitHandoff || reportedHandoff || contextTransfer || speakerDeferral;
+}
+
+function isClarifyingPrompt(text: string) {
+  return /\b(i'?d love to understand|i would love to understand|help me understand|tell me more|could you share|can you walk|would love to hear|curious how|curious what|can you unpack|what i want to understand|walk me through)\b/i.test(
+    text
+  );
+}
+
+function bridgeAnswerOwner(
+  text: string,
+  askerSide: PersonInsight["side"],
+  responderSide: PersonInsight["side"],
+  fallback: DealQuestion["answerOwner"]
+) {
+  const normalized = text.toLowerCase();
+
+  if (
+    askerSide === "customer" &&
+    responderSide === "oasis" &&
+    /\b(leave|defer|hand|turn|pass|over to)\b.{0,80}\b(you|customer|team)\b/.test(
+      normalized
+    )
+  ) {
+    return "Customer";
+  }
+
+  if (
+    askerSide === "oasis" &&
+    responderSide === "customer" &&
+    /\b(leave|defer|hand|turn|pass|over to)\b.{0,80}\b(you|oasis|team)\b/.test(
+      normalized
+    )
+  ) {
+    return "Oasis";
+  }
+
+  return fallback;
+}
+
+function isSubstantiveAnswer(text: string) {
+  const normalized = text.toLowerCase();
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+
+  if (wordCount < 7 || isBridgeAnswer(text) || isClarifyingPrompt(text)) {
+    return false;
+  }
+
+  return /because|we (?:think|see|use|need|want|have|are|were|communicated|framed|approach|prioritize|care|worry|evaluate)|our (?:approach|board|team|priority|concern|process|requirement|criteria|goal)|board|governance|policy|risk|security|compliance|approval|procurement|budget|timeline|success criteria|scorecard|poc|pilot|integration|sandbox|production|access|model|agentic|audit|workflow|identity|credential|secret|vault/i.test(
+    normalized
+  );
+}
+
+function answerCandidateScore(
+  sentence: string,
+  question: string,
+  questionTokens: string[],
+  responseSide: PersonInsight["side"],
+  expectedOwner: DealQuestion["answerOwner"],
+  askerSide: PersonInsight["side"],
+  turnDistance: number,
+  sawBridge: boolean
+) {
+  const normalized = sentence.toLowerCase();
+  const expectedSide =
+    expectedOwner === "Oasis"
+      ? "oasis"
+      : expectedOwner === "Customer"
+        ? "customer"
+        : "unknown";
+  let score = answerRelevanceScore(sentence, question, questionTokens);
+
+  if (responseSide === expectedSide) score += 4;
+  if (responseSide === "unknown") score -= 1;
+  if (askerSide !== "unknown" && responseSide === askerSide) {
+    score += sawBridge ? 3 : -4;
+  }
+  if (isSubstantiveAnswer(sentence)) score += 4;
+  if (isDeferredAnswer(sentence)) score -= 1;
+  if (/^(yes|yeah|yep|correct|no|not really)[,.\s]/i.test(normalized)) score -= 1;
+  if (/^(he|she|they|tony)\s+said\b/i.test(normalized)) score -= 3;
+
+  return score - Math.min(turnDistance - 1, 5) * 0.35;
+}
+
+function bestAnswerCandidateForTurn(
+  turn: SpeakerTurn,
+  turnDistance: number,
+  question: string,
+  questionTokens: string[],
+  responseSide: PersonInsight["side"],
+  expectedOwner: DealQuestion["answerOwner"],
+  askerSide: PersonInsight["side"],
+  sawBridge: boolean
+): AnswerCandidate | null {
+  const candidates = answerSentencesFromTurn(turn.text)
+    .filter((sentence) => !isBridgeAnswer(sentence) && !isClarifyingPrompt(sentence))
+    .map((sentence, sentenceIndex): AnswerCandidate => ({
+      answer: sentence.slice(0, 420),
+      answeredBy: turn.speaker,
+      answerOwner: answerOwnerForSide(responseSide, expectedOwner),
+      status: isDeferredAnswer(sentence) ? "deferred" : "answered",
+      score: answerCandidateScore(
+        sentence,
+        question,
+        questionTokens,
+        responseSide,
+        expectedOwner,
+        askerSide,
+        turnDistance,
+        sawBridge
+      ),
+      turnIndex: turnDistance + sentenceIndex / 100,
+    }))
+    .filter((candidate) => candidate.score >= 3);
+
+  return (
+    candidates.sort((a, b) => b.score - a.score || a.turnIndex - b.turnIndex)[0] ??
+    null
   );
 }
 
@@ -790,12 +937,24 @@ function answerRelevanceScore(
   const normalizedSentence = sentence.toLowerCase();
   const normalizedQuestion = question.toLowerCase();
   const domainTerms = [
+    "access",
+    "agentic",
+    "ai",
+    "approval",
+    "audit",
     "azure",
+    "board",
     "cyberark",
+    "governance",
     "hashicorp",
+    "identity",
+    "model",
     "okta",
+    "policy",
+    "risk",
     "sandbox",
     "scorecard",
+    "security",
     "servicenow",
     "service now",
     "success criteria",
@@ -855,26 +1014,75 @@ function answerForQuestion(
   attendees: PersonInsight[],
   askerSide: PersonInsight["side"],
   question: string
-): Pick<DealQuestion, "answer" | "answeredBy" | "status"> {
+): Pick<DealQuestion, "answer" | "answeredBy" | "answerOwner" | "status"> {
   const expectedOwner = ownerForQuestion(askerSide);
+  const questionTokens = importantQuestionTokens(question);
+  const candidates: AnswerCandidate[] = [];
+  let sawBridge = false;
+  let bridgeCandidate: AnswerCandidate | null = null;
 
-  for (const turn of turns.slice(startIndex + 1, startIndex + 5)) {
+  for (let offset = 1; offset <= 9; offset += 1) {
+    const turn = turns[startIndex + offset];
+    if (!turn) break;
+
     const responseSide = sideForSpeaker(attendees, turn.speaker);
-    if (askerSide !== "unknown" && responseSide === askerSide) continue;
-    if (expectedOwner === "Oasis" && responseSide === "customer") continue;
-    if (expectedOwner === "Customer" && responseSide === "oasis") continue;
+    const sentences = answerSentencesFromTurn(turn.text);
 
-    const answer = answerSentenceForQuestion(turn.text, question);
-    if (!answer) continue;
+    for (const sentence of sentences) {
+      if (!isBridgeAnswer(sentence)) continue;
 
+      sawBridge = true;
+      bridgeCandidate ??= {
+        answer: "",
+        answeredBy: turn.speaker,
+        answerOwner: bridgeAnswerOwner(sentence, askerSide, responseSide, expectedOwner),
+        status: "deferred",
+        score: 0,
+        turnIndex: startIndex + offset,
+      };
+    }
+
+    const candidate = bestAnswerCandidateForTurn(
+      turn,
+      offset,
+      question,
+      questionTokens,
+      responseSide,
+      expectedOwner,
+      askerSide,
+      sawBridge
+    );
+
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+
+  const best = candidates.sort((a, b) => b.score - a.score || a.turnIndex - b.turnIndex)[0];
+  if (best) {
     return {
-      answer,
-      answeredBy: turn.speaker,
-      status: isDeferredAnswer(answer) ? "deferred" : "answered",
+      answer: best.answer,
+      answeredBy: best.answeredBy,
+      answerOwner: best.answerOwner,
+      status: best.status,
     };
   }
 
-  return { answer: "", answeredBy: "", status: "open" };
+  if (bridgeCandidate) {
+    return {
+      answer: "",
+      answeredBy: bridgeCandidate.answeredBy,
+      answerOwner: bridgeCandidate.answerOwner,
+      status: "deferred",
+    };
+  }
+
+  return {
+    answer: "",
+    answeredBy: "",
+    answerOwner: expectedOwner,
+    status: "open",
+  };
 }
 
 function detectQuestions(
@@ -904,7 +1112,7 @@ function detectQuestions(
         askedBy: turn.speaker,
         answeredBy: answer.answeredBy,
         answer: answer.answer,
-        answerOwner: owner,
+        answerOwner: answer.answerOwner,
         action:
           answer.status === "answered"
             ? "Answered on call"
