@@ -40,6 +40,7 @@ type DealQuestion = {
   question: string;
   status: "open" | "answered" | "deferred" | "action";
   owner: "Oasis" | "Customer" | "Mutual";
+  answerOwner: "Oasis" | "Customer" | "Mutual";
   kind: "customer_question" | "oasis_question" | "oasis_action" | "customer_action";
   askedBy: string;
   answeredBy: string;
@@ -47,6 +48,7 @@ type DealQuestion = {
   action: string;
   priority: "High" | "Medium" | "Low";
   time: string;
+  timeline: string;
 };
 
 type DealSignal = {
@@ -814,6 +816,39 @@ function answerRelevanceScore(
   return score;
 }
 
+function timelineFromText(...values: string[]) {
+  const source = values.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const normalized = source.toLowerCase();
+  const explicitDate = source.match(
+    /\b(?:by|before|on|after|during)?\s*((?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:,?\s+20\d{2})?|\d{1,2}\/\d{1,2}(?:\/(?:20)?\d{2})?)\b/i
+  );
+  if (explicitDate?.[0]) return explicitDate[0].trim();
+
+  const timelinePhrases: Array<[RegExp, string]> = [
+    [/\bbefore\s+(?:the\s+)?next\s+check-?in\b/i, "Before next check-in"],
+    [/\bnext\s+check-?in\b/i, "Next check-in"],
+    [/\bbefore\s+(?:the\s+)?next\s+call\b/i, "Before next call"],
+    [/\bnext\s+call\b/i, "Next call"],
+    [/\bbefore\s+(?:the\s+)?next\s+meeting\b/i, "Before next meeting"],
+    [/\bnext\s+meeting\b/i, "Next meeting"],
+    [/\bbefore\s+scoring\s+begins\b/i, "Before scoring begins"],
+    [/\bbefore\s+(?:the\s+)?poc\b/i, "Before POC"],
+    [/\bpoc\s+kickoff\b/i, "POC kickoff"],
+    [/\bthis\s+week\b/i, "This week"],
+    [/\bnext\s+week\b/i, "Next week"],
+    [/\bimmediately\b/i, "Immediately"],
+    [/\basap\b/i, "ASAP"],
+    [/\bafter\s+(?:the\s+)?vendor\s+assessment\b/i, "After vendor assessment"],
+    [/\bafter\s+(?:the\s+)?security\s+review\b/i, "After security review"],
+  ];
+
+  for (const [pattern, label] of timelinePhrases) {
+    if (pattern.test(normalized)) return label;
+  }
+
+  return "";
+}
+
 function answerForQuestion(
   turns: SpeakerTurn[],
   startIndex: number,
@@ -869,6 +904,7 @@ function detectQuestions(
         askedBy: turn.speaker,
         answeredBy: answer.answeredBy,
         answer: answer.answer,
+        answerOwner: owner,
         action:
           answer.status === "answered"
             ? "Answered on call"
@@ -881,6 +917,7 @@ function detectQuestions(
               : "Mutual follow-up needed",
         priority: priorityForText(question),
         time: turn.time ?? "",
+        timeline: timelineFromText(question, answer.answer),
       });
     }
   }

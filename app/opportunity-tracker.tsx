@@ -107,6 +107,7 @@ type TranscriptQuestion = {
   question: string;
   status: string;
   owner?: string;
+  answerOwner?: string;
   kind?: string;
   askedBy?: string;
   answeredBy?: string;
@@ -114,6 +115,7 @@ type TranscriptQuestion = {
   action?: string;
   priority?: string;
   time?: string;
+  timeline?: string;
 };
 
 type QuestionView = "person" | "timeline" | "open";
@@ -440,6 +442,50 @@ function questionPriorityRank(question: EnrichedQuestion) {
   return (
     (statusScore[question.status] ?? 1) * 10 +
     (priorityScore[question.priority ?? "Low"] ?? 1)
+  );
+}
+
+function answerOwnerLabel(question: TranscriptQuestion) {
+  return question.answerOwner || question.owner || "Mutual";
+}
+
+function timelineCueFromText(...values: Array<string | undefined>) {
+  const source = values.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const normalized = source.toLowerCase();
+  const explicitDate = source.match(
+    /\b(?:by|before|on|after|during)?\s*((?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:,?\s+20\d{2})?|\d{1,2}\/\d{1,2}(?:\/(?:20)?\d{2})?)\b/i
+  );
+  if (explicitDate?.[0]) return explicitDate[0].trim();
+
+  const cues: Array<[RegExp, string]> = [
+    [/\bbefore\s+(?:the\s+)?next\s+check-?in\b/i, "Before next check-in"],
+    [/\bnext\s+check-?in\b/i, "Next check-in"],
+    [/\bbefore\s+(?:the\s+)?next\s+call\b/i, "Before next call"],
+    [/\bnext\s+call\b/i, "Next call"],
+    [/\bbefore\s+(?:the\s+)?next\s+meeting\b/i, "Before next meeting"],
+    [/\bnext\s+meeting\b/i, "Next meeting"],
+    [/\bbefore\s+scoring\s+begins\b/i, "Before scoring begins"],
+    [/\bpoc\s+kickoff\b/i, "POC kickoff"],
+    [/\bthis\s+week\b/i, "This week"],
+    [/\bnext\s+week\b/i, "Next week"],
+    [/\bimmediately\b/i, "Immediately"],
+    [/\basap\b/i, "ASAP"],
+    [/\bafter\s+(?:the\s+)?vendor\s+assessment\b/i, "After vendor assessment"],
+    [/\bafter\s+(?:the\s+)?security\s+review\b/i, "After security review"],
+  ];
+
+  for (const [pattern, label] of cues) {
+    if (pattern.test(normalized)) return label;
+  }
+
+  return "";
+}
+
+function questionTimelineLabel(question: EnrichedQuestion) {
+  return (
+    question.timeline ||
+    timelineCueFromText(question.question, question.answer, question.action) ||
+    "No timeline captured"
   );
 }
 
@@ -2335,6 +2381,12 @@ function QuestionCard({ question }: { question: EnrichedQuestion }) {
     (question.status === "answered"
       ? "Answered on the call."
       : "No captured answer yet.");
+  const askerDetails = [question.person.role, question.person.title, question.person.company]
+    .filter(Boolean)
+    .join(" · ");
+  const timelineLabel = questionTimelineLabel(question);
+  const answerOwner = answerOwnerLabel(question);
+  const showLoopDetails = questionIsOpen(question);
 
   return (
     <article className={`question-card question-card-${statusClass}`}>
@@ -2344,6 +2396,29 @@ function QuestionCard({ question }: { question: EnrichedQuestion }) {
           {question.time ? ` at ${question.time}` : ""} · {question.title}
         </span>
         <strong>&quot;{question.question}&quot;</strong>
+        {showLoopDetails ? (
+          <div className="question-loop-grid" aria-label="Open loop ownership">
+            <span>
+              <em>Asked by</em>
+              {question.askedBy || question.person.name}
+              {askerDetails ? <small>{askerDetails}</small> : null}
+            </span>
+            <span>
+              <em>Answer owner</em>
+              {answerOwner}
+              {question.answeredBy ? <small>last response: {question.answeredBy}</small> : null}
+            </span>
+            <span>
+              <em>Timeline</em>
+              {timelineLabel}
+              <small>
+                {question.callDate
+                  ? `source call ${dateLabel(question.callDate)}`
+                  : "from transcript"}
+              </small>
+            </span>
+          </div>
+        ) : null}
         <p className={question.answer ? "question-answer" : "question-answer muted"}>
           {question.answer ? `${question.answeredBy || "Answer"}: ${answerText}` : answerText}
         </p>
@@ -2352,7 +2427,7 @@ function QuestionCard({ question }: { question: EnrichedQuestion }) {
         <span className={`question-status-pill status-${statusClass}`}>
           {questionStatusLabel(question.status)}
         </span>
-        <span className="risk-pill risk-medium">{question.owner ?? "Mutual"}</span>
+        <span className="risk-pill risk-medium">{answerOwner}</span>
         <span className={`risk-pill ${
           question.priority === "High"
             ? "risk-high"
